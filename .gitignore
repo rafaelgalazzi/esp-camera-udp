@@ -1,0 +1,14 @@
+build/
+.reference/
+.pio/
+firmware/managed_components/
+firmware/artifacts/
+firmware/sdkconfig*
+!firmware/sdkconfig.defaults
+firmware/include/secrets.h
+firmware/include/wifi_build_config.h
+firmware/wifi.ini
+*.local.ini
+pairings.txt
+*.log
+__pycache__/
