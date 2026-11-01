@@ -1,60 +1,60 @@
 # OpenIris UDP Bridge
 
-Transmissão de até **três câmeras ESP32 por UDP**, com uma ponte no PC que disponibiliza cada vídeo como **HTTP MJPEG local** para navegador ou software de tracking.
+Stream up to **three ESP32 cameras over UDP**, with a PC bridge that exposes each video feed as **local HTTP MJPEG** for a browser or tracking application.
 
-O firmware usa **ESP-IDF/C++** e o aplicativo usa **C++17**, com operação pelo terminal.
+The firmware uses **ESP-IDF/C++** and the desktop application uses **C++17**, operated from the terminal.
 
 ```text
-OV2640 -> JPEG na ESP32 -> UDP/Wi-Fi -> ponte C++ -> HTTP MJPEG local -> consumidor
+OV2640 -> JPEG on ESP32 -> UDP/Wi-Fi -> C++ bridge -> local HTTP MJPEG -> consumer
 ```
 
-A ponte remonta os frames e repassa o JPEG sem recompressão. Descoberta automática, pareamento persistente e descarte de frames incompletos mantêm cada câmera independente.
+The bridge reassembles frames and forwards JPEG data without recompression. Automatic discovery, persistent pairing, and incomplete-frame dropping keep each camera independent.
 
-| Configuração atual | Valor |
+| Current configuration | Value |
 |---|---|
 | Hardware | Seeed Studio XIAO ESP32S3 Sense + OV2640 |
-| Imagem | Preto e branco, 240 × 240 |
-| JPEG | Qualidade 10; menor número = maior qualidade |
-| Teto de envio | 90 FPS por câmera; taxa real depende do hardware e da rede |
-| Rede das câmeras | Wi-Fi 2,4 GHz, UDP |
-| Saída do PC | Três endpoints HTTP MJPEG em `127.0.0.1:8080` |
+| Image | Black and white, 240 x 240 |
+| JPEG | Quality 10; lower numbers mean higher quality |
+| Sending limit | 90 FPS per camera; actual rate depends on hardware and network |
+| Camera network | 2.4 GHz Wi-Fi, UDP |
+| PC output | Three HTTP MJPEG endpoints at `127.0.0.1:8080` |
 
-**Guia:** [Início rápido](#início-rápido) · [Compilar o PC](#compilar-e-executar-no-windows) · [Pareamento](#descoberta-e-pareamento) · [Vídeo](#consumir-os-streams) · [Diagnóstico](#diagnóstico-rápido) · [Validação](#validação)
+**Guide:** [Quick start](#quick-start) | [Build the PC application](#build-and-run-on-windows) | [Pairing](#discovery-and-pairing) | [Video](#view-the-streams) | [Troubleshooting](#quick-troubleshooting) | [Validation](#validation)
 
-## Início rápido
+## Quick start
 
-Execute os comandos na raiz do repositório. Para o PC, instale CMake ≥ 3.20 e Visual Studio 2022 com ferramentas C++. Para as placas, use PlatformIO. Python 3 é necessário para o teste de integração.
+Run commands from the repository root. The PC application requires CMake >= 3.20 and Visual Studio 2022 with C++ build tools. Use PlatformIO for the boards. Python 3 is required for the integration test.
 
-### 1. Configure o Wi-Fi
+### 1. Configure Wi-Fi
 
-Copie o modelo, caso ainda não exista `firmware/wifi.ini`:
+Copy the template if `firmware/wifi.ini` does not exist yet:
 
 ```powershell
 Copy-Item firmware/wifi.example.ini firmware/wifi.ini
 ```
 
-Edite `firmware/wifi.ini`, sem aspas nos valores:
+Edit `firmware/wifi.ini`, without quotes around values:
 
 ```ini
 [wifi]
-ssid = NOME_DA_REDE
-password = SENHA_DA_REDE
+ssid = NETWORK_NAME
+password = NETWORK_PASSWORD
 ```
 
-Cada novo build aplica os dados do INI no primeiro boot, substituindo a configuração antiga. Depois, alterações por USB persistem até o próximo build. O INI é ignorado pelo Git; as credenciais ficam incorporadas no binário gerado.
+Each new build applies the INI settings on its first boot, replacing the previous configuration. Subsequent USB changes persist until the next build. The INI is ignored by Git; credentials are embedded in the generated binary.
 
-### 2. Grave a câmera
+### 2. Flash the camera
 
-Conecte a placa por USB, identifique a porta e substitua `COM8` pela porta encontrada:
+Connect the board over USB, identify its port, and replace `COM8` with that port:
 
 ```powershell
 pio device list
 .\tools\build-firmware.ps1 -Action upload -Port COM8
 ```
 
-Feche qualquer monitor serial antes da gravação. O wrapper também permite compilar a partir de pastas com espaços. Repita a gravação nas outras placas; cada câmera é identificada pelo MAC de fábrica.
+Close any serial monitor before flashing. The wrapper also supports building from directories containing spaces. Repeat for the other boards; each camera is identified by its factory MAC address.
 
-### 3. Inicie a ponte no PC
+### 3. Start the PC bridge
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -62,11 +62,11 @@ cmake --build build --config Release
 .\build\Release\openiris-udp-bridge.exe --config config.ini
 ```
 
-Conecte o PC à mesma LAN das câmeras e permita entrada UDP nas portas **5000 e 5001** no firewall da rede privada. Quando o terminal indicar `STREAMING`, abra um dos [endereços de vídeo](#consumir-os-streams) no mesmo computador.
+Connect the PC to the same LAN as the cameras and allow inbound UDP on ports **5000 and 5001** through the private-network firewall. Once the terminal shows `STREAMING`, open one of the [video URLs](#view-the-streams) on the same computer.
 
-## Compilar e executar no Windows
+## Build and run on Windows
 
-Requer CMake >= 3.20 e Visual Studio 2022 com ferramentas C++. Não há bibliotecas externas no aplicativo.
+Requires CMake >= 3.20 and Visual Studio 2022 with C++ build tools. The application has no external library dependencies.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -75,9 +75,9 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\Release\openiris-udp-bridge.exe --config config.ini
 ```
 
-O executável também funciona fora do diretório do projeto: passe o caminho do arquivo de configuração. `state_file` é relativo ao diretório de trabalho, portanto use caminho absoluto se for executar por um agendador. O runtime do MSVC deve estar instalado no PC de destino.
+The executable can run outside the project directory: pass the configuration file path. `state_file` is relative to the working directory, so use an absolute path when running through a scheduler. The target PC must have the MSVC runtime installed.
 
-Linux/macOS (caminho POSIX implementado; a validação desta entrega foi feita no Windows):
+Linux/macOS (the POSIX code path is implemented; this delivery was validated on Windows):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -86,29 +86,29 @@ ctest --test-dir build --output-on-failure
 ./build/openiris-udp-bridge --config config.ini
 ```
 
-Opções:
+Options:
 
 ```text
---config arquivo.ini
+--config file.ini
 --stats-interval 5
 --log-level INFO|WARN|ERROR
 --json
 --help
 ```
 
-Use `--json > bridge.log` para gravar eventos como JSON por linha. `Ctrl+C` encerra o receptor e os clientes HTTP. O aplicativo não abre janelas.
+Use `--json > bridge.log` to save one JSON event per line. `Ctrl+C` shuts down the receiver and HTTP clients. The application does not open windows.
 
 ## Firmware
 
-Veja [firmware/README.md](firmware/README.md) para configuração USB, compilação e gravação. Existe um ambiente para o hardware informado: `xiao_esp32s3_ov2640`. O mesmo binário pode ser gravado nas três placas; o MAC de fábrica identifica cada uma.
+See [firmware/README.md](firmware/README.md) for USB configuration, building, and flashing. The environment for the supported hardware is `xiao_esp32s3_ov2640`. The same binary can be flashed to all three boards; their factory MAC addresses identify them.
 
-## Descoberta e pareamento
+## Discovery and pairing
 
-1. Inicie a ponte. Ela escuta UDP `5000` para vídeo e `5001` para controle.
-2. Configure o Wi-Fi pelo INI antes do build ou por USB e ligue as câmeras na mesma LAN.
-3. As câmeras enviam sondagens UDP broadcast a cada segundo. A ponte registra até três IDs e responde por unicast com porta de vídeo, FPS e ID persistente do servidor.
-4. As câmeras salvam esse ID em NVS. A ponte salva `pairings.txt`, preservando os endpoints após reinício ou troca de IP.
-5. Configure os papéis usando os IDs exibidos no terminal e reinicie a ponte:
+1. Start the bridge. It listens on UDP `5000` for video and `5001` for control.
+2. Configure camera Wi-Fi through the INI before building or over USB, and connect the cameras to the same LAN.
+3. Cameras send UDP broadcast probes every second. The bridge registers up to three IDs and replies by unicast with the video port, FPS limit, and persistent server ID.
+4. Cameras save that ID in NVS. The bridge saves `pairings.txt`, preserving endpoints across restarts and IP changes.
+5. Assign roles using the IDs shown in the terminal, then restart the bridge:
 
 ```ini
 [camera.000012345678abcd]
@@ -124,90 +124,90 @@ endpoint=3
 role=face
 ```
 
-Esses IDs são exemplos. A atribuição automática inicial segue a ordem de descoberta e usa `unassigned`; não tenta adivinhar qual câmera observa cada olho. Não remova `pairings.txt` para uma simples atualização: ele também contém a identidade do PC. Se precisar mudar endpoints, mantenha a unicidade dos três no arquivo de configuração.
+These are example IDs. Initial automatic assignment follows discovery order and uses `unassigned`; it does not guess which camera views each eye. Do not remove `pairings.txt` for a routine update: it also contains the PC's identity. If you change endpoints, keep all three unique in the configuration.
 
-Após cadastrar as câmeras, `auto_pair=false` limita registros aos IDs conhecidos ou declarados no INI. Para escolher um PC específico antes do primeiro pareamento, configure `preferred_server` no firmware com o ID exibido pela ponte. `unpair` por USB limpa o pareamento da câmera; uma câmera já pareada ignora outros PCs.
+After registering the cameras, `auto_pair=false` limits registration to known IDs or IDs declared in the INI. To select a specific PC before first pairing, set `preferred_server` in the firmware to the ID printed by the bridge. The USB `unpair` command clears camera pairing; an already paired camera ignores other PCs.
 
-**Descoberta implementada:** UDP broadcast, com destino IPv4 manual opcional no firmware. O MVP usa a alternativa UDP prevista no projeto; **não anuncia nem consulta mDNS/DNS-SD**. Wi-Fi com isolamento de clientes, VLANs e firewalls podem bloquear a descoberta. O destino manual contorna bloqueio de broadcast, mas não substitui conectividade IP. No Windows, permita tráfego de entrada UDP nas portas 5000/5001 na rede privada. HTTP fica em loopback por padrão.
+**Implemented discovery:** UDP broadcast, with an optional manual IPv4 destination in the firmware. The MVP uses the UDP alternative described in the project; it **does not advertise or query mDNS/DNS-SD**. Wi-Fi client isolation, VLANs, and firewalls may block discovery. A manual destination bypasses blocked broadcasts but still requires IP connectivity. On Windows, allow inbound UDP on ports 5000/5001 on the private network. HTTP binds to loopback by default.
 
-Allowlist e ID de servidor são filtros de pareamento, **não autenticação criptográfica**. Os IDs e o vídeo trafegam em claro. Use em uma LAN confiável. Para evitar colisão durante migração, um ID ativo em outro IP só é aceito depois de 6 s sem heartbeat do IP anterior.
+The allowlist and server ID are pairing filters, **not cryptographic authentication**. IDs and video travel in clear text. Use a trusted LAN. To avoid collisions during migration, an active ID at another IP is accepted only after 6 seconds without a heartbeat from the previous IP.
 
-## Consumir os streams
+## View the streams
 
-| Câmera | Endereço no mesmo PC |
+| Camera | URL on the same PC |
 |---|---|
 | 1 | <http://127.0.0.1:8080/camera/1.mjpeg> |
 | 2 | <http://127.0.0.1:8080/camera/2.mjpeg> |
 | 3 | <http://127.0.0.1:8080/camera/3.mjpeg> |
 
-Endpoints sem câmera pareada retornam 404. Uma câmera pareada e offline mantém o endpoint; a conexão aguarda frames novos e retoma quando a câmera volta. O cliente pode reconectar por seu próprio timeout.
+Endpoints without a paired camera return 404. A paired but offline camera keeps its endpoint; the connection waits for new frames and resumes when the camera returns. The client may reconnect according to its own timeout.
 
-O código do Baballonia consultado possui `IpCameraCaptureFactory`, que aceita endereços `http://`, e `IpCameraCapture`, que consome JPEGs do stream HTTP. Selecione a entrada Wireless/IP Camera e use o URL do papel correspondente, conforme a interface instalada. A ponte é independente da versão do consumidor. A inspeção do código confirma a existência do caminho de entrada; **não equivale a um teste de tracking no Baballonia instalado**. Referências e commit estão em [docs/validation.md](docs/validation.md).
+The inspected Baballonia code includes `IpCameraCaptureFactory`, which accepts `http://` addresses, and `IpCameraCapture`, which consumes JPEGs from the HTTP stream. Select Wireless/IP Camera input and use the URL for the corresponding role, as supported by the installed interface. The bridge is independent of the consumer version. Code inspection confirms that the input path exists; **it is not a tracking test against the installed Baballonia application**. References and the inspected commit are in [docs/validation.md](docs/validation.md).
 
-## Diagnóstico rápido
+## Quick troubleshooting
 
 ```powershell
 .\tools\build-firmware.ps1 -Action monitor -Port COM8
 ```
 
-O monitor não exibe o que você digita. Envie uma linha por vez, seguida de Enter:
+The monitor does not echo what you type. Send one line at a time, followed by Enter:
 
 ```json
 {"command":"status"}
 {"command":"scan"}
 ```
 
-`status` mostra a rede configurada e o estado da conexão. `scan` lista redes detectadas e interrompe temporariamente o streaming.
+`status` shows the configured network and connection state. `scan` lists detected networks and temporarily interrupts streaming.
 
-| Sintoma | Verificação |
+| Symptom | Check |
 |---|---|
-| `reason=201` | Confira o SSID mostrado por `status`, a rede 2,4 GHz e a antena; execute `scan`. |
-| Wi-Fi conectado, sem câmera no PC | Confira firewall UDP 5000/5001, mesma LAN e isolamento de clientes no roteador. |
-| HTTP 404 | O endpoint ainda não tem uma câmera pareada. |
-| Monitor sem mensagens | Envie `status`; confira a porta e se outro programa está usando a serial. |
-| Imagem escura ou desfocada | Confira iluminação e foco da lente; o perfil usa exposição manual. |
+| `reason=201` | Check the SSID reported by `status`, the 2.4 GHz network, and the antenna; run `scan`. |
+| Wi-Fi connected, but no camera on the PC | Check UDP firewall ports 5000/5001, the shared LAN, and router client isolation. |
+| HTTP 404 | No camera is paired with that endpoint yet. |
+| Serial monitor is silent | Send `status`; check the port and whether another application is using it. |
+| Dark or blurry image | Check lighting and lens focus; the profile uses manual exposure. |
 
-Mais detalhes: [firmware e comandos USB](firmware/README.md).
+More details: [firmware and USB commands](firmware/README.md).
 
-## Limites e comportamento
+## Limits and behavior
 
 <details>
-<summary>Buffers, métricas e validação de pacotes</summary>
+<summary>Buffers, metrics, and packet validation</summary>
 
-- 3 câmeras, 8 clientes HTTP simultâneos, JPEG máximo de 256 KiB.
-- Datagramas de até 1248 bytes (48 de cabeçalho + 1200 de payload).
-- Um frame em remontagem por câmera. Um ID mais novo descarta a remontagem anterior; fragmentos desse novo frame podem chegar fora de ordem.
-- Timeout padrão de remontagem: 100 ms. Não há retransmissão de frames.
-- Um frame completo mais recente por câmera; cada cliente mantém no máximo uma referência adicional durante o envio. Clientes lentos pulam frames e são desconectados quando o envio de um frame excede 1 s.
-- Pacotes de origem não registrada, boot antigo, servidor errado, tamanho inválido ou JPEG sem SOI/EOI são descartados. Não há decodificação para validar todo o bitstream JPEG.
-- `DISCOVERED`, `CONNECTING`, `STREAMING`, `DEGRADED` (500 ms sem frame), `OFFLINE` (3 s por padrão). Heartbeats sozinhos não mantêm o estado de vídeo saudável.
-- Estatísticas: frames observados/s, completos/s, bytes/s, perdas estimadas, descartes, duplicatas, pacotes atrasados, idade local, reconexões, CPU e RAM do processo. CPU é percentual de um núcleo; em POSIX a RAM reportada é o pico de RSS, no Windows é o working set atual.
-- Perda estimada conta fragmentos ausentes de frames observados e abandonados; não mede frames cujos pacotes foram todos perdidos. Pacotes rejeitados antes de identificar uma sessão não entram nos contadores da câmera.
-- `age_ms` usa apenas o relógio do PC. Não representa latência de captura; não há sincronização de relógios.
+- 3 cameras, 8 simultaneous HTTP clients, maximum JPEG size of 256 KiB.
+- Datagrams up to 1,248 bytes: 48 header bytes + 1,200 payload bytes.
+- One frame being reassembled per camera. A newer ID discards the previous reassembly; fragments of the new frame may arrive out of order.
+- Default reassembly timeout: 100 ms. Frames are not retransmitted.
+- One latest complete frame per camera; each client holds at most one additional reference during sending. Slow clients skip frames and are disconnected when sending one frame exceeds 1 second.
+- Packets from unregistered sources, old boots, wrong servers, invalid sizes, or JPEGs missing SOI/EOI are discarded. The complete JPEG bitstream is not decoded for validation.
+- States: `DISCOVERED`, `CONNECTING`, `STREAMING`, `DEGRADED` (500 ms without a frame), `OFFLINE` (3 seconds by default). Heartbeats alone do not keep video health marked as good.
+- Statistics: observed frames/s, complete frames/s, bytes/s, estimated loss, drops, duplicates, late packets, local frame age, reconnections, process CPU and RAM. CPU is a percentage of one core; POSIX reports peak RSS, while Windows reports the current working set.
+- Estimated loss counts missing fragments from observed, abandoned frames; it cannot measure frames whose packets were all lost. Packets rejected before identifying a session do not enter camera counters.
+- `age_ms` uses only the PC clock. It is not capture latency; clocks are not synchronized.
 
 </details>
 
-O arquivo de configuração usa **INI estrito**, escolhido para manter o binário C++ sem dependência YAML. Opções desconhecidas e endpoints duplicados são erros. Configuração e papéis são lidos na inicialização; reinicie após editar.
+The configuration uses **strict INI** to keep the C++ binary free of YAML dependencies. Unknown options and duplicate endpoints are errors. Configuration and roles are read at startup; restart after editing.
 
-## Validação
+## Validation
 
-Os testes C++ cobrem formato binário, limites, reordenação, duplicatas, expiração, IDs antigos, wraparound e JPEG inválido. O teste de integração inicia o executável real, simula três dispositivos, lê HTTP multipart e verifica isolamento de cliente lento, reinício da câmera/ponte e persistência.
+C++ tests cover the wire format, limits, reordering, duplicates, expiration, old IDs, wraparound, and invalid JPEGs. The integration test starts the actual executable, simulates three devices, reads HTTP multipart streams, and checks slow-client isolation, camera/bridge restarts, and persistence.
 
-O aplicativo e firmware são C++; Python 3 é usado somente no teste de integração, sem dependências externas. CMake registra esse teste quando encontra Python. Pode ser executado diretamente:
+The application and firmware are C++; the integration test uses Python 3 without external dependencies. CMake registers this test when Python is available. It can also run directly:
 
 ```powershell
 python tests/integration.py build/Release/openiris-udp-bridge.exe
 ```
 
-Os fixtures sintéticos verificam transporte byte a byte, não decodificação óptica. Testes com as três câmeras físicas, interferência, tracking e sessões de horas precisam ser executados no equipamento. O teto de 90 FPS não garante essa taxa efetiva. Veja o roteiro em [docs/validation.md](docs/validation.md).
+Synthetic fixtures verify byte-for-byte transport, not image decoding. Tests with three physical cameras, interference, tracking, and hours-long sessions must run on the actual equipment. A 90 FPS ceiling does not guarantee that effective rate. See [docs/validation.md](docs/validation.md).
 
-Arquitetura do protocolo: [docs/protocol.md](docs/protocol.md).
+Protocol architecture: [docs/protocol.md](docs/protocol.md).
 
-## Referências
+## References
 
-O perfil do sensor foi baseado no [OpenIris-ESPIDF](https://github.com/EyeTrackVR/OpenIris-ESPIDF). Este projeto implementa seu próprio transporte UDP; não é um fork completo e não inclui UVC, OTA, controles de LEDs ou API REST do OpenIris. O processamento de tracking fica a cargo do consumidor.
+The sensor profile is based on [OpenIris-ESPIDF](https://github.com/EyeTrackVR/OpenIris-ESPIDF). This project implements its own UDP transport; it is not a complete fork and does not include OpenIris UVC, OTA, LED controls, or REST APIs. The consumer handles tracking.
 
-- [Firmware: configuração e hardware](firmware/README.md)
-- [Protocolo UDP](docs/protocol.md)
-- [Validação e fontes consultadas](docs/validation.md)
-- [Documento original do projeto](PROJETO_OPENIRIS_UDP_BRIDGE.md)
+- [Firmware configuration and hardware](firmware/README.md)
+- [UDP protocol](docs/protocol.md)
+- [Validation and consulted sources](docs/validation.md)
+- [Original project specification](PROJETO_OPENIRIS_UDP_BRIDGE.md)

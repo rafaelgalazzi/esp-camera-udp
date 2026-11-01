@@ -1,44 +1,44 @@
-# OIRB v1 — formato binário
+# OIRB v1 - binary format
 
-Todos os inteiros são unsigned, em **network byte order / big endian**. Não se transmite uma struct C++ crua. Encoder/decoder único: `common/protocol.hpp`.
+All integers are unsigned, in **network byte order / big endian**. Raw C++ structs are not transmitted. Shared encoder/decoder: `common/protocol.hpp`.
 
-| Offset | Bytes | Campo |
+| Offset | Bytes | Field |
 |---:|---:|---|
 | 0 | 4 | ASCII `OIRB` |
-| 4 | 1 | Versão = 1 |
-| 5 | 1 | Tipo: HELLO=1, ACCEPT=2, JPEG=3 |
+| 4 | 1 | Version = 1 |
+| 5 | 1 | Type: HELLO=1, ACCEPT=2, JPEG=3 |
 | 6 | 2 | Payload length |
-| 8 | 8 | Camera ID: MAC de 48 bits, dois bytes superiores zero |
-| 16 | 4 | Boot ID, aleatório e não zero |
+| 8 | 8 | Camera ID: 48-bit MAC, upper two bytes zero |
+| 16 | 4 | Random, nonzero boot ID |
 | 20 | 4 | Frame ID |
-| 24 | 8 | Timestamp da captura em microssegundos no relógio do dispositivo |
-| 32 | 2 | Índice do fragmento, base zero |
-| 34 | 2 | Quantidade de fragmentos |
-| 36 | 4 | Tamanho total do JPEG |
-| 40 | 8 | ID persistente do servidor |
-| 48 | variável | Payload |
+| 24 | 8 | Capture timestamp in microseconds on the device clock |
+| 32 | 2 | Zero-based fragment index |
+| 34 | 2 | Fragment count |
+| 36 | 4 | Total JPEG size |
+| 40 | 8 | Persistent server ID |
+| 48 | variable | Payload |
 
-Comprimento UDP exato = 48 + payload length. Até 1200 bytes de payload. IPv4 + UDP + OIRB + payload = 1276 bytes no maior pacote, abaixo do MTU usual de 1500. Redes com MTU inferior ainda precisam ser avaliadas.
+Exact UDP payload length = 48 + payload length. Up to 1,200 bytes of fragment payload. IPv4 + UDP + OIRB + payload totals 1,276 bytes for the largest packet, below the usual 1,500-byte MTU. Networks with smaller MTUs still require evaluation.
 
-## Controle, porta 5001
+## Control, port 5001
 
-**HELLO:** câmera envia de socket efêmero para broadcast `255.255.255.255:5001` ou IP manual. Camera/boot são obrigatórios. Server ID=0 permite primeiro pareamento; depois contém o ID persistido. Payload opcional de até 128 bytes, informativo, por exemplo `xiao-esp32s3-sense;OV2640;iris-udp/1.0;JPEG;240x240;monochrome`. Frame/index/count/total devem ser zero na origem; o receptor não usa esses campos de controle.
+**HELLO:** the camera sends from an ephemeral socket to broadcast `255.255.255.255:5001` or a manual IP. Camera/boot are required. Server ID=0 allows initial pairing; afterward it contains the persisted ID. Optional informational payload up to 128 bytes, for example `xiao-esp32s3-sense;OV2640;iris-udp/1.0;JPEG;240x240;monochrome`. Frame/index/count/total must be zero at the source; the receiver does not use these fields for control messages.
 
-**ACCEPT:** resposta unicast à origem do HELLO. Repete camera/boot, informa servidor não zero. Payload de 4 bytes: porta UDP de vídeo uint16 + FPS máximo uint16 (1..90). O firmware usa o menor limite entre seu máximo local e o oferecido. Não há retransmissão explícita; HELLO se repete a cada segundo e renova a presença. O PC mantém o registro por ID, não por IP.
+**ACCEPT:** unicast reply to the HELLO source. Repeats camera/boot and supplies a nonzero server ID. Four-byte payload: video UDP port uint16 + maximum FPS uint16 (1..90). The firmware uses the lower of its local limit and the offered limit. There is no explicit retransmission; HELLO repeats every second and renews presence. The PC tracks registration by ID, not IP.
 
-Um registro mantém autorização por 6 s no PC. Uma câmera para de transmitir após 4 s sem ACCEPT. Troca de boot limpa a remontagem e o frame publicado anterior. Um IP diferente para um ID ativo é rejeitado até expirar a presença anterior. Esse mecanismo detecta colisões simples, mas não prova identidade nem impede spoofing.
+Registration remains authorized for 6 seconds on the PC. A camera stops transmitting after 4 seconds without ACCEPT. A boot change clears reassembly and the previously published frame. A different IP for an active ID is rejected until the previous presence expires. This detects simple collisions but does not prove identity or prevent spoofing.
 
-## Vídeo, porta 5000
+## Video, port 5000
 
-Cada fragmento traz camera/boot/server correspondentes ao registro. `total` entre 4 e 262144; `count=ceil(total/1200)`; `index<count`. Todos os fragmentos, exceto o último, contêm 1200 bytes. O último contém o restante exato. Tamanho, quantidade e timestamp permanecem iguais em todos os fragmentos do frame.
+Each fragment carries camera/boot/server values matching registration. `total` is between 4 and 262144; `count=ceil(total/1200)`; `index<count`. All fragments except the last contain 1,200 bytes. The last contains the exact remainder. Total size, count, and timestamp remain identical across all fragments of a frame.
 
-IDs de frame usam ordenação modular de 32 bits. A diferença deve ser menor que 2³¹ para ser considerada mais nova. Um boot novo permite reiniciar IDs. Um frame mais novo abandona o anterior mesmo incompleto. Timeout de remontagem é contado a partir do primeiro fragmento observado e não é prorrogado por duplicatas. Um frame expirado não pode ser ressuscitado por fragmentos atrasados.
+Frame IDs use 32-bit modular ordering. The difference must be less than 2^31 to count as newer. A new boot allows IDs to restart. A newer frame abandons the previous one even if incomplete. Reassembly timeout starts at the first observed fragment and is not extended by duplicates. Late fragments cannot revive an expired frame.
 
-JPEG só é publicado quando todos os fragmentos únicos chegam e os marcadores inicial `FFD8` e final `FFD9` existem. A validação não garante decodificação de todo o JPEG. Não há CRC adicional, FEC ou retransmissão nesta versão. O timestamp é transportado, mas não é interpretado como latência absoluta.
+A JPEG is published only after all unique fragments arrive and the initial `FFD8` and final `FFD9` markers are present. Validation does not guarantee that the entire JPEG decodes. This version has no additional CRC, FEC, or retransmission. The timestamp is carried but is not interpreted as absolute latency.
 
-## HTTP local
+## Local HTTP
 
-`GET /camera/N.mjpeg`, N=1..3 pareado. Resposta `200`, `Content-Type: multipart/x-mixed-replace; boundary=frame`, cache desativado, conexão fechada ao encerrar. Cada parte:
+`GET /camera/N.mjpeg`, where N=1..3 is paired. Response: `200`, `Content-Type: multipart/x-mixed-replace; boundary=frame`, caching disabled, connection closed on shutdown. Each part:
 
 ```text
 --frame\r\n
@@ -48,4 +48,4 @@ Content-Length: <bytes>\r\n
 <JPEG>\r\n
 ```
 
-Não há Content-Length global nem codificação HTTP chunked. Não é necessário um delimitador final em uma conexão interrompida. Cliente lento tem deadline de envio de 1 s por parte; não há fila de frames por cliente.
+There is no global Content-Length or HTTP chunked encoding. An interrupted connection does not require a final delimiter. A slow client has a 1-second send deadline per part; there is no per-client frame queue.

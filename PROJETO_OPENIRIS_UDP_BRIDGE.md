@@ -1,10 +1,12 @@
-# OpenIris UDP Bridge — Projeto
+# OpenIris UDP Bridge - Project specification
 
-## 1. Visão geral
+> This is the translated original proposal. It describes planned requirements and alternatives, not necessarily the current implementation. See [README.md](README.md) for current settings and usage.
 
-Desenvolver uma solução de baixa latência para **três câmeras ESP32 com firmware baseado no OpenIris**, conectadas por Wi-Fi 2,4 GHz. Cada câmera capturará imagens do olho e transmitirá frames JPEG usando **UDP** para um aplicativo local no PC. O aplicativo será **headless (sem interface gráfica)**, executado pelo terminal, reconstruirá os frames e disponibilizará **três streams HTTP MJPEG locais**, inicialmente para consumo pelo **Baballonia**, que continuará responsável pelo processamento e rastreamento ocular.
+## 1. Overview
 
-**Fluxo desejado:**
+Develop a low-latency solution for **three ESP32 cameras with OpenIris-based firmware**, connected over 2.4 GHz Wi-Fi. Each camera captures eye images and transmits JPEG frames over **UDP** to a local PC application. The application is **headless (no graphical interface)**, runs in the terminal, reconstructs frames, and provides **three local HTTP MJPEG streams**, initially for **Baballonia**, which remains responsible for image processing and eye tracking.
+
+**Intended flow:**
 
 ```text
 ESP32 1 -- UDP/JPEG --\
@@ -12,70 +14,70 @@ ESP32 2 -- UDP/JPEG ----> PC: OpenIris UDP Bridge ---> HTTP MJPEG localhost --->
 ESP32 3 -- UDP/JPEG --/
 ```
 
-**Objetivo:** eliminar a transmissão HTTP MJPEG sobre o trecho Wi-Fi (potencial fonte de bloqueios e filas), mantendo a compatibilidade com o formato de vídeo já conhecido pelo software receptor, sem precisar reimplementar o algoritmo de tracking.
+**Goal:** remove HTTP MJPEG transmission from the Wi-Fi segment, a potential source of blocking and queues, while maintaining compatibility with the receiving application's familiar video format without reimplementing tracking.
 
-> **Limitação importante:** UDP não torna a rede imune à interferência nem garante streaming sem travamentos. O objetivo é evitar *travamentos prolongados e atraso acumulado*: pacotes ou frames incompletos devem ser descartados, e o sistema deve priorizar sempre o frame completo mais recente.
+> **Important limitation:** UDP does not make the network immune to interference or guarantee uninterrupted streaming. The goal is to avoid *prolonged freezes and accumulated delay*: incomplete packets or frames should be discarded, and the system should always prioritize the latest complete frame.
 
-## 2. Situação atual e motivação
+## 2. Current situation and motivation
 
-- Três câmeras ESP32 compartilham uma rede Wi-Fi de 2,4 GHz.
-- O OpenIris original oferece streaming de imagens MJPEG via HTTP; é possível encontrar quedas de qualidade, congelamentos e latência com fluxos simultâneos.
-- O transporte atual utiliza HTTP sobre TCP, que preserva a ordem dos bytes e pode acumular atrasos quando há perdas/retransmissões.
-- A proposta **não** é trocar simplesmente TCP por UDP: é criar um protocolo de frames com limites explícitos de buffer, identificação de frames e descarte de dados atrasados.
-- O projeto original OpenIris está arquivado e aponta para um novo desenvolvimento; avaliar a base de firmware escolhida antes de integrar mudanças.
+- Three ESP32 cameras share a 2.4 GHz Wi-Fi network.
+- The original OpenIris streams MJPEG over HTTP; simultaneous streams may experience quality drops, freezes, and latency.
+- The current transport uses HTTP over TCP, which preserves byte ordering and may accumulate delay during loss/retransmission.
+- The proposal is **not** simply to replace TCP with UDP: it requires a frame protocol with explicit buffer limits, frame identification, and late-data dropping.
+- The original OpenIris project is archived and points to newer development; evaluate the selected firmware base before integrating changes.
 
-## 3. Escopo
+## 3. Scope
 
-### Incluído no MVP
+### Included in the MVP
 
-1. Recriar/adaptar o firmware ESP32 como **projeto PlatformIO compilável**, com captura JPEG, envio UDP, descoberta do PC e perfis de hardware adequados.
-2. Desenvolver aplicativo local que **descubra automaticamente as câmeras na mesma rede** e receba as três transmissões simultaneamente, sem exigir cadastro manual de endereços IP.
-3. Reconstruir cada imagem por câmera, validar seus pacotes e descartar frames incompletos ou ultrapassados.
-4. Disponibilizar um endpoint HTTP MJPEG separado por câmera, vinculado por padrão a `127.0.0.1`.
-5. Exibir no terminal, sem interface gráfica, métricas por câmera: FPS recebido, FPS completo, perdas, frames descartados, bytes/s, idade do último frame e estado da conexão.
-6. Testar integração dos URLs locais com o Baballonia e ajustar o formato HTTP MJPEG conforme necessário.
-7. Implementar recuperação automática após quedas de Wi-Fi, reinicializações ou interrupções do stream.
-8. Fazer pareamento e identificação persistente das câmeras, com associação de cada dispositivo a um papel configurável (olho esquerdo, olho direito ou face).
+1. Recreate/adapt ESP32 firmware as a **buildable PlatformIO project**, with JPEG capture, UDP sending, PC discovery, and appropriate hardware profiles.
+2. Develop a local application that **automatically discovers cameras on the same network** and receives all three streams simultaneously without manually entering IP addresses.
+3. Reconstruct each camera's images, validate packets, and discard incomplete or outdated frames.
+4. Provide a separate HTTP MJPEG endpoint per camera, bound to `127.0.0.1` by default.
+5. Show per-camera terminal metrics without a GUI: received FPS, complete FPS, losses, dropped frames, bytes/s, latest-frame age, and connection state.
+6. Test local URL integration with Baballonia and adjust the HTTP MJPEG format as necessary.
+7. Implement automatic recovery from Wi-Fi drops, restarts, and stream interruptions.
+8. Provide persistent camera pairing and identification, assigning each device a configurable role: left eye, right eye, or face.
 
-### Fora do escopo inicial
+### Outside the initial scope
 
-- Criar um novo algoritmo de rastreamento ocular no aplicativo intermediário.
-- Criar interface gráfica (GUI), dashboard web ou janela de pré-visualização de vídeo no MVP.
-- Garantir FPS fixo ou zero perda de frames em qualquer ambiente Wi-Fi.
-- Alterar internamente o Baballonia sem necessidade comprovada.
-- Usar retransmissão confiável de frames antigos como comportamento padrão.
+- Creating a new eye-tracking algorithm in the intermediary application.
+- Creating a GUI, web dashboard, or video preview window in the MVP.
+- Guaranteeing fixed FPS or zero frame loss in every Wi-Fi environment.
+- Modifying Baballonia internals without a demonstrated need.
+- Using reliable retransmission of old frames as the default behavior.
 
-## 4. Arquitetura
+## 4. Architecture
 
-### 4.1 Firmware ESP32 (produtor)
+### 4.1 ESP32 firmware (producer)
 
-- Captura imagens com as configurações disponíveis da câmera.
-- Faz compressão JPEG na origem, quando suportada pelo sensor/firmware; caso a origem seja escala de cinza, confirmar suporte ou custo da codificação JPEG.
-- Divide JPEGs em datagramas de tamanho seguro, com payload inicial sugerido de **~1.200 bytes** por pacote, para reduzir o risco de fragmentação IP.
-- Adiciona cabeçalho binário com versão de protocolo, ID da câmera, ID do frame, índice do pacote, total de pacotes, tamanho dos dados e timestamp de captura.
-- Descobre o PC automaticamente por serviço mDNS/DNS-SD (preferencialmente) ou responde a anúncio/sondagem UDP na LAN; o destino pode ser configurado manualmente como fallback.
-- Envia pacotes UDP ao IP/porta descobertos do computador; **uma única porta de recepção, como `5000`, pode servir às três câmeras** porque o cabeçalho identifica a origem. Portas distintas são opcionais.
-- Limita taxa de frames e qualidade JPEG por configuração.
-- Prioriza a captura atual e evita filas ilimitadas.
-- Mantém um canal de configuração e diagnóstico (por exemplo, HTTP de controle), se isso for compatível com o firmware escolhido; não precisa manter MJPEG sobre Wi-Fi.
+- Capture images using the available camera settings.
+- Compress JPEG at the source when supported by the sensor/firmware; for grayscale sources, confirm JPEG encoding support or cost.
+- Split JPEGs into safely sized datagrams, initially suggesting **about 1,200 payload bytes** per packet to reduce IP fragmentation risk.
+- Add a binary header with protocol version, camera ID, frame ID, packet index, packet count, data length, and capture timestamp.
+- Discover the PC automatically using mDNS/DNS-SD (preferred), or respond to UDP announcements/probes on the LAN; allow a manually configured destination as fallback.
+- Send UDP packets to the discovered PC IP/port; **one receiving port, such as `5000`, can serve all three cameras** because the header identifies the source. Separate ports are optional.
+- Limit frame rate and JPEG quality through configuration.
+- Prioritize current capture and avoid unbounded queues.
+- Keep a configuration/diagnostic channel, such as control HTTP, if compatible with the chosen firmware; retaining MJPEG over Wi-Fi is unnecessary.
 
-### 4.2 Aplicativo local no PC (ponte)
+### 4.2 Local PC application (bridge)
 
-**Descoberta automática:** serviço mDNS/DNS-SD anunciado pelo PC e descoberto pelas ESP32, e descoberta das câmeras pelo PC (aproveitando os recursos mDNS já existentes no OpenIris, mediante validação dos nomes/tipos de serviço). Como fallback, beacon/sondagem UDP em broadcast na sub-rede, ou cadastro de IP manual. A descoberta deve encontrar câmeras novas, detectar reinícios, lidar com mudanças de IP e informar quando a rede bloqueia multicast/broadcast.
+**Automatic discovery:** the PC advertises an mDNS/DNS-SD service discovered by the ESP32s, and the PC discovers the cameras, reusing existing OpenIris mDNS capabilities after validating service names/types. Fallback options are subnet UDP broadcast beacons/probes or a manual IP. Discovery must find new cameras, detect restarts, handle IP changes, and report multicast/broadcast blocking.
 
-**Camada de entrada UDP:** socket(s) para receber pacotes, identificar a câmera por identificador estável e separar o estado de cada stream.
+**UDP input layer:** sockets receive packets, identify cameras by stable identifiers, and separate stream state.
 
-**Reconstrução:** buffer temporário limitado por câmera; remontagem fora de ordem; detecção de duplicatas, pacotes ausentes e expiração de frames; descarte imediato de JPEG incompleto após timeout.
+**Reassembly:** a bounded temporary buffer per camera; out-of-order reassembly; duplicate, missing-packet, and frame-expiration detection; immediate incomplete-JPEG discard after timeout.
 
-**Camada de frames:** fila de **um frame completo mais recente** por câmera (política *latest-frame-wins*). Um cliente lento não deve fazer crescer a fila de imagens.
+**Frame layer:** a queue containing **one latest complete frame** per camera (*latest-frame-wins*). Slow clients must not cause image queues to grow.
 
-**Servidor de saída HTTP:** disponibilizar `multipart/x-mixed-replace` com `image/jpeg` para que cada entrada possa ser consumida como stream MJPEG local. Cada conexão mantém fila de saída curta e fecha/reconecta clientes travados.
+**HTTP output server:** provide `multipart/x-mixed-replace` with `image/jpeg` so each input can be consumed as a local MJPEG stream. Each connection keeps a short output queue and closes/reconnects stalled clients.
 
-**Interface/monitoramento:** **exclusivamente terminal (CLI/TUI textual simples), sem janela, painel web ou pré-visualização de vídeo**. Exibir câmera detectada, ID persistente, IP atual, papel atribuído, estado e métricas por câmera; registrar eventos de descoberta, conexão, desconexão e reconexão. Atribuições e parâmetros serão definidos inicialmente por arquivo `config.yaml` (ou argumentos CLI), sem menus gráficos. As atribuições sobrevivem a mudanças de IP e reinícios. Logs devem ser legíveis, com opção de saída JSON para automação futura.
+**Interface/monitoring:** **terminal only (simple text CLI/TUI), without windows, a web dashboard, or video preview**. Show detected camera, persistent ID, current IP, assigned role, state, and per-camera metrics; log discovery, connection, disconnection, and reconnection events. Initially define assignments and parameters through `config.yaml` or CLI arguments, without graphical menus. Assignments survive IP changes and restarts. Logs must be readable, with optional JSON output for future automation.
 
-### 4.3 Integração com Baballonia (consumidor)
+### 4.3 Baballonia integration (consumer)
 
-Endpoints **propostos** (não são APIs já verificadas):
+**Proposed** endpoints, not already verified APIs:
 
 ```text
 http://127.0.0.1:8080/camera/1.mjpeg
@@ -83,17 +85,17 @@ http://127.0.0.1:8080/camera/2.mjpeg
 http://127.0.0.1:8080/camera/3.mjpeg
 ```
 
-O aplicativo local hospeda os streams, e **o Baballonia realiza o tracking**. A ponte não precisa interpretar os olhos.
+The local application hosts the streams, and **Baballonia performs tracking**. The bridge does not need to interpret eyes.
 
-**Ponto de validação obrigatório:** confirmar que a versão em uso do Baballonia aceita URLs MJPEG HTTP locais na configuração de cada câmera e que o formato de multipart, cabeçalhos, resolução, orientação e identificação do dispositivo são compatíveis. Se a interface do Baballonia exigir descoberta específica, API do OpenIris ou outro mecanismo de entrada, implementar um *adaptador de compatibilidade* em vez de presumir que somente três URLs bastam.
+**Required validation:** confirm that the installed Baballonia version accepts local HTTP MJPEG URLs for each camera, and that multipart format, headers, resolution, orientation, and device identification are compatible. If Baballonia requires specific discovery, the OpenIris API, or another input mechanism, implement a *compatibility adapter* rather than assuming three URLs are sufficient.
 
-O HTTP MJPEG entre dois processos no mesmo PC utiliza a interface de loopback; portanto, o custo de transporte sobre Wi-Fi não se repete nessa etapa. Entretanto, o cliente ainda pode ser lento: filas e timeouts continuam necessários.
+HTTP MJPEG between processes on the same PC uses loopback, so Wi-Fi transport costs are not repeated at this stage. However, the client can still be slow: queues and timeouts remain necessary.
 
-## 4.4 Execução headless e observabilidade no terminal
+## 4.4 Headless operation and terminal observability
 
-**Requisito de produto:** o programa inicia pelo terminal, descobre automaticamente câmeras sem IP pré-configurado, publica os endpoints locais e imprime estados e métricas. **Não deve abrir nenhuma janela**. O stream MJPEG é servido silenciosamente em background enquanto o processo permanece em execução.
+**Product requirement:** the program starts from the terminal, automatically discovers cameras without preconfigured IPs, publishes local endpoints, and prints states and metrics. **It must not open any windows.** MJPEG is served quietly in the background while the process runs.
 
-Exemplo ilustrativo de log (endereços e valores fictícios):
+Illustrative log with fictional addresses and values:
 
 ```text
 $ openiris-udp-bridge --config config.yaml
@@ -109,14 +111,14 @@ $ openiris-udp-bridge --config config.yaml
 [12:00:14] INFO  cam-b42e RECONNECTED ip=192.168.1.102
 ```
 
-- Logar eventos imediatamente; imprimir resumo de estatísticas a cada **5 segundos** por padrão, configurável para evitar poluição do terminal.
-- Estados por câmera: `DISCOVERED`, `CONNECTING`, `STREAMING`, `DEGRADED`, `OFFLINE`.
-- Métricas: FPS completo, pacotes perdidos (estimado), frames incompletos/descartados, taxa de recebimento, tempo desde último frame completo, origem IP e número de reconexões.
-- Não apresentar “latência de captura” absoluta sem sincronização de relógios ESP32/PC; mostrar idade local do frame e, se houver relógios sincronizados, latência fim a fim estimada.
-- Permitir `--log-level`, `--stats-interval`, `--config`; encerrar de forma limpa com `Ctrl+C`.
-- Sem configuração inicial dos papéis, listar as câmeras por ID e permitir edição posterior do arquivo de configuração. Os endpoints devem continuar estáveis após mudanças de IP.
+- Log events immediately; print a statistics summary every **5 seconds** by default, configurable to avoid terminal clutter.
+- Per-camera states: `DISCOVERED`, `CONNECTING`, `STREAMING`, `DEGRADED`, `OFFLINE`.
+- Metrics: complete FPS, estimated lost packets, incomplete/dropped frames, receive rate, time since the last complete frame, source IP, and reconnection count.
+- Do not report absolute capture latency without ESP32/PC clock synchronization; show local frame age and, if clocks are synchronized, estimated end-to-end latency.
+- Support `--log-level`, `--stats-interval`, and `--config`; shut down cleanly with `Ctrl+C`.
+- Without initial role configuration, list cameras by ID and allow later configuration-file edits. Endpoints must remain stable across IP changes.
 
-Exemplo de configuração inicial (valores ilustrativos):
+Example initial configuration with illustrative values:
 
 ```yaml
 udp:
@@ -137,91 +139,91 @@ cameras:
   cam-c53d: {role: face, endpoint: 3}
 ```
 
-Os IDs do exemplo não são IDs reais. A descoberta automática depende de o firmware ESP32 implementar a descoberta/registro correspondente e de o roteador permitir a comunicação local necessária.
+Example IDs are not real IDs. Automatic discovery depends on corresponding discovery/registration support in ESP32 firmware and a router that permits the necessary local communication.
 
-## 5. Descoberta automática, pareamento e reconexão
+## 5. Automatic discovery, pairing, and reconnection
 
-**Requisito obrigatório:** ao abrir o app do PC, as ESP32 na mesma LAN devem ser encontradas automaticamente, sem digitar seus IPs. O firmware recriado precisa implementar o lado correspondente deste protocolo.
+**Mandatory requirement:** when the PC application opens, ESP32s on the same LAN must be found automatically without entering their IPs. The recreated firmware must implement its side of this protocol.
 
-### 5.1 Descoberta recomendada
+### 5.1 Recommended discovery
 
-1. O PC anuncia um serviço de recepção, por exemplo `_openiris-udp._udp.local`, por **mDNS/DNS-SD**, com porta e versão de protocolo. Nome e tipo são **novos e propostos para esta ponte**, não interfaces oficiais do OpenIris.
-2. Cada ESP32 procura o serviço, obtém endereço/porta do PC e inicia o registro via mensagem de controle contendo ID estável da câmera, nome, modelo, versão de firmware, capacidades e endereço atual.
-3. O PC mantém um inventário de dispositivos vistos, inclusive câmeras temporariamente offline; associa cada ID a **olho esquerdo**, **olho direito** ou **face** por configuração persistida e registra a associação no terminal.
-4. O PC confirma o registro e autoriza o início de streaming, informando parâmetros como FPS máximo e porta UDP.
-5. Heartbeats e timeout de presença indicam desconexão; após a ESP32 religar ou trocar de IP, o app a reconhece pelo **ID persistente**, nunca apenas pelo IP.
-6. Se mDNS não funcionar na rede, fornecer descoberta alternativa por **UDP broadcast** na sub-rede e configuração manual de endereço. Broadcast geralmente não atravessa sub-redes/VLANs e pode ser bloqueado por isolamento de clientes; documentar isso.
+1. The PC advertises a receiving service, for example `_openiris-udp._udp.local`, through **mDNS/DNS-SD**, including port and protocol version. The name/type are **new proposals for this bridge**, not official OpenIris interfaces.
+2. Each ESP32 locates the service, obtains the PC address/port, and registers through a control message containing stable camera ID, name, model, firmware version, capabilities, and current address.
+3. The PC maintains an inventory of seen devices, including temporarily offline cameras; persistently associates each ID with **left eye**, **right eye**, or **face**; and logs that assignment in the terminal.
+4. The PC confirms registration and authorizes streaming, supplying parameters such as maximum FPS and UDP port.
+5. Heartbeats and presence timeouts indicate disconnection; after an ESP32 restarts or changes IP, the application recognizes its **persistent ID**, never just the IP.
+6. If mDNS does not work, provide **UDP broadcast** subnet discovery and manual addressing. Broadcast generally does not cross subnets/VLANs and may be blocked by client isolation; document this.
 
-O OpenIris original já menciona **mDNS** para descoberta e comunicação com o tracker; reaproveitar essa ideia onde possível. Não presumir que o firmware atual anuncie o novo serviço acima: será necessário adicioná-lo ou adaptá-lo. Para evitar ambiguidades com múltiplas máquinas, possibilitar seleção/pareamento com o PC correto e persistir o identificador do servidor.
+The original OpenIris already mentions **mDNS** for discovery and tracker communication; reuse that idea where possible. Do not assume existing firmware advertises this new service: it must be added or adapted. To avoid ambiguity with multiple computers, support selection/pairing with the correct PC and persist the server identifier.
 
-### 5.2 Regras de confiabilidade
+### 5.2 Reliability rules
 
-- Separar tráfego de **controle/descoberta** da transmissão contínua de frames; não bloquear a recepção de vídeo em operações de descoberta.
-- Não confiar apenas em mensagens de broadcast para determinar se o streaming está saudável: monitorar o último frame JPEG completo recebido.
-- Para impedir múltiplos dispositivos com IDs idênticos, gerar ou derivar um identificador estável único e validar colisões.
-- Limitar e validar anúncios/frames de dispositivos desconhecidos, oferecer **pareamento/allowlist** para evitar fontes não autorizadas na rede local.
-- Não assumir multicast/mDNS disponível em todas as configurações de roteador; oferecer fallback e mensagens de diagnóstico específicas.
-- Persistir a associação entre ID estável e papel; ao restabelecer a conexão, restaurar o endpoint local correspondente, mesmo com IP diferente.
+- Separate **control/discovery** traffic from continuous frame transmission; discovery must not block video reception.
+- Do not rely on broadcasts alone to assess stream health: monitor the last complete JPEG received.
+- Generate or derive unique stable identifiers and validate collisions to prevent identical IDs across devices.
+- Limit and validate announcements/frames from unknown devices; offer **pairing/allowlists** to prevent unauthorized local sources.
+- Do not assume multicast/mDNS works with every router configuration; provide fallback and specific diagnostic messages.
+- Persist stable-ID-to-role assignments; restore the corresponding local endpoint after reconnection, even if the IP changes.
 
-## 6. Protocolo UDP proposto (v1)
+## 6. Proposed UDP protocol (v1)
 
-Cada datagrama contém `header + payload`. Especificação detalhada a fechar antes da implementação:
+Each datagram contains `header + payload`. Finalize the detailed specification before implementation:
 
-| Campo | Objetivo |
+| Field | Purpose |
 |---|---|
-| Magic + versão | Identificar pacote e versão |
-| Camera ID | Identificar stream |
-| Frame ID (uint32) | Detectar quadros novos/antigos |
-| Packet index (uint16) | Reordenar segmentos |
-| Packet count (uint16) | Saber quando o JPEG está completo |
-| Capture timestamp | Medir atraso desde a captura |
-| Payload length | Validar tamanho recebido |
-| Payload | Bytes do JPEG |
+| Magic + version | Identify packet and version |
+| Camera ID | Identify stream |
+| Frame ID (uint32) | Detect new/old frames |
+| Packet index (uint16) | Reorder segments |
+| Packet count (uint16) | Determine when the JPEG is complete |
+| Capture timestamp | Measure delay since capture |
+| Payload length | Validate received size |
+| Payload | JPEG bytes |
 
-Regras:
+Rules:
 
-- Enviar datagramas abaixo do MTU efetivo, evitando fragmentação IP.
-- Limitar quantidade de frames em reconstrução e memória por câmera.
-- Validar índices, tamanhos e identificadores antes de alocar memória.
-- Aceitar reordenação de pacotes; descartar duplicatas.
-- Abandonar frames incompletos depois de timeout configurável.
-- Se um frame mais recente estiver disponível, nunca bloquear o stream esperando um frame antigo.
-- Considerar CRC/checksum de frame se os testes justificarem o custo.
-- Usar controle de versão para permitir evolução do protocolo.
+- Keep datagrams below the effective MTU to avoid IP fragmentation.
+- Bound the number of frames in reassembly and memory usage per camera.
+- Validate indices, sizes, and identifiers before allocating memory.
+- Accept packet reordering; discard duplicates.
+- Abandon incomplete frames after a configurable timeout.
+- If a newer frame is available, never block the stream waiting for an older one.
+- Consider a frame CRC/checksum if tests justify its cost.
+- Version the protocol to support future evolution.
 
-**Observação:** um único datagrama perdido pode invalidar o JPEG inteiro, então testes práticos devem ajustar tamanho de pacote, FPS, compressão e timeout.
+**Note:** a single lost datagram can invalidate the entire JPEG, so practical testing must guide packet size, FPS, compression, and timeout adjustments.
 
-## 7. Tecnologias sugeridas
+## 7. Suggested technologies
 
-- **Firmware:** projeto **PlatformIO** em C/C++ com `platformio.ini`, preferencialmente usando o framework ESP-IDF (`framework = espidf`) e reaproveitando código compatível do OpenIris. A seleção exata de placa, sensor, pinos e PSRAM é obrigatória.
-- **Protótipo do PC:** Python com `asyncio` ou sockets, servidor HTTP assíncrono (`aiohttp` ou equivalente) e saída de métricas apenas no terminal (`logging`; `rich` opcional, sem dependência de GUI).
-- **Produção (opcional):** C++/Rust/.NET, caso medições revelem gargalo no protótipo. Não migrar sem necessidade comprovada.
-- **OpenCV:** apenas como ferramenta opcional de depuração/visualização; não é necessário decodificar e recodificar JPEG em cada frame se a ponte só repassar os bytes.
+- **Firmware:** a C/C++ **PlatformIO** project with `platformio.ini`, preferably ESP-IDF (`framework = espidf`), reusing compatible OpenIris code. Exact board, sensor, pinout, and PSRAM selection is mandatory.
+- **PC prototype:** Python with `asyncio` or sockets, an asynchronous HTTP server (`aiohttp` or equivalent), and terminal-only metrics (`logging`; optional `rich`, without GUI dependencies).
+- **Production (optional):** C++/Rust/.NET if measurements reveal prototype bottlenecks. Do not migrate without a demonstrated need.
+- **OpenCV:** optional debugging/visualization only; there is no need to decode and re-encode JPEG on every frame when the bridge only forwards bytes.
 
-## 7.1 Requisito de entrega do firmware: PlatformIO
+## 7.1 Firmware delivery requirement: PlatformIO
 
-O firmware ESP32 deve ser **entregue como projeto PlatformIO**, com `platformio.ini` na raiz, código-fonte C/C++, dependências declaradas, arquivos de configuração e documentação de build/flash/monitor serial. A finalidade é permitir abrir o projeto no VS Code com a extensão PlatformIO, compilar e gravar cada ESP32 sem depender de binários precompilados.
+ESP32 firmware must be **delivered as a PlatformIO project**, with `platformio.ini` at its root, C/C++ source, declared dependencies, configuration files, and build/flash/serial-monitor documentation. Users should be able to open it in VS Code with the PlatformIO extension, compile, and flash each ESP32 without relying on precompiled binaries.
 
-Estrutura **proposta** (não corresponde necessariamente à árvore atual dos repositórios OpenIris):
+**Proposed** structure, not necessarily the current OpenIris repository layout:
 
 ```text
 firmware/
-├── platformio.ini
-├── CMakeLists.txt                 # se usar framework ESP-IDF
-├── sdkconfig.defaults           # se necessário, sem segredos
-├── boards/                      # perfis de pinagem/sensor/PSRAM
-├── include/
-├── src/
-│   ├── CMakeLists.txt            # se usar framework ESP-IDF
-│   ├── main.cpp
-│   ├── camera_capture.cpp
-│   ├── udp_streamer.cpp
-│   ├── discovery.cpp
-│   └── wifi_manager.cpp
-└── README.md
+|-- platformio.ini
+|-- CMakeLists.txt               # when using ESP-IDF
+|-- sdkconfig.defaults           # if needed; no secrets
+|-- boards/                      # pinout/sensor/PSRAM profiles
+|-- include/
+|-- src/
+|   |-- CMakeLists.txt           # when using ESP-IDF
+|   |-- main.cpp
+|   |-- camera_capture.cpp
+|   |-- udp_streamer.cpp
+|   |-- discovery.cpp
+|   `-- wifi_manager.cpp
+`-- README.md
 ```
 
-Exemplo **ilustrativo** de configuração; **`esp32-s3-devkitc-1` não deve ser usado sem confirmar a placa e o sensor reais**:
+**Illustrative** configuration; **do not use `esp32-s3-devkitc-1` without confirming the actual board and sensor**:
 
 ```ini
 [env:esp32s3_example]
@@ -231,7 +233,7 @@ framework = espidf
 monitor_speed = 115200
 ```
 
-Comandos esperados, após configurar a placa e a porta corretas:
+Expected commands after selecting the correct board and port:
 
 ```bash
 pio run -e esp32s3_example
@@ -239,120 +241,125 @@ pio run -e esp32s3_example -t upload
 pio device monitor -b 115200
 ```
 
-Requisitos adicionais:
+Additional requirements:
 
-- Criar **um ambiente por variante de hardware** efetivamente utilizada; não supor que os três módulos têm a mesma pinagem.
-- Documentar sensor, pinagem, clock, flash, PSRAM, qualidade JPEG, FPS, credenciais Wi-Fi (fora do repositório) e parâmetros do protocolo UDP.
-- Preservar, se possível, configuração persistente de Wi-Fi, ID estável, diagnóstico serial e recuperação após perda da rede.
-- Fornecer instruções de flash, configuração inicial e testes de descoberta automática.
-- Evitar incluir senhas de Wi-Fi em `platformio.ini` ou no controle de versão.
-- Se portar código do **OpenIris-ESPIDF** para PlatformIO, validar CMake, componentes, `sdkconfig`, versões do ESP-IDF e perfis `boards/`; **não assumir compatibilidade direta sem adaptações**, já que o fluxo documentado do upstream usa ESP-IDF nativo.
-- Se a placa escolhida não for suportada pelo PlatformIO/ESP-IDF selecionado, registrar o bloqueio e ajustar o ambiente antes de avançar.
+- Create **one environment per hardware variant** actually used; do not assume all three modules share a pinout.
+- Document sensor, pinout, clock, flash, PSRAM, JPEG quality, FPS, Wi-Fi credentials (outside version control), and UDP protocol parameters.
+- Preserve persistent Wi-Fi settings, stable ID, serial diagnostics, and network-loss recovery where possible.
+- Provide flashing, initial setup, and automatic discovery testing instructions.
+- Avoid including Wi-Fi passwords in `platformio.ini` or version control.
+- When porting **OpenIris-ESPIDF** code to PlatformIO, validate CMake, components, `sdkconfig`, ESP-IDF versions, and `boards/` profiles; **do not assume direct compatibility without adaptations**, since upstream documents a native ESP-IDF workflow.
+- If the chosen board is unsupported by the selected PlatformIO/ESP-IDF versions, record the blocker and adjust the environment before proceeding.
 
-Referências específicas do toolchain:
+Toolchain references:
 
 - PlatformIO + ESP-IDF: https://docs.platformio.org/en/latest/frameworks/espidf.html
-- Configuração `platformio.ini`: https://docs.platformio.org/en/latest/projectconf/index.html
-- Repositório de origem do novo firmware: https://github.com/EyeTrackVR/OpenIris-ESPIDF
+- `platformio.ini` configuration: https://docs.platformio.org/en/latest/projectconf/index.html
+- New firmware source repository: https://github.com/EyeTrackVR/OpenIris-ESPIDF
 
-## 8. Metas de desempenho e critérios de aceitação
+## 8. Performance goals and acceptance criteria
 
-Metas iniciais sujeitas a medição no hardware real:
+Initial goals, subject to measurement on real hardware:
 
-1. Receber **3 streams simultâneos** sem bloqueio cruzado entre câmeras.
-2. Operar nos FPS suportados pelos dispositivos e rede, buscando **30 FPS estáveis por câmera** como primeiro marco, com testes posteriores a 60 FPS.
-3. Evitar crescimento de latência ao longo do tempo: não acumular filas de frames antigos.
-4. Recuperar automaticamente o stream após perdas ou reinício de uma ESP32.
-5. Manter cada endpoint local acessível de forma independente.
-6. Medir e registrar FPS, taxa de perda, frames descartados, atraso estimado e uso de CPU/RAM.
-7. Confirmar rastreamento funcional no Baballonia com **três entradas**, se suportadas/configuráveis na versão escolhida.
-8. Detectar automaticamente as três câmeras na LAN, lembrar seus papéis e reencontrá-las após reinício ou mudança de IP.
+1. Receive **3 simultaneous streams** without cross-camera blocking.
+2. Operate at FPS supported by devices and network, targeting **stable 30 FPS per camera** as the first milestone, followed by 60 FPS tests.
+3. Avoid increasing latency over time: do not accumulate old-frame queues.
+4. Automatically recover streaming after packet loss or an ESP32 restart.
+5. Keep each local endpoint independently accessible.
+6. Measure and log FPS, loss rate, dropped frames, estimated delay, and CPU/RAM usage.
+7. Confirm working Baballonia tracking with **three inputs**, if supported/configurable in the selected version.
+8. Automatically detect all three LAN cameras, remember their roles, and rediscover them after restarts or IP changes.
 
-**Não considerar o projeto concluído apenas porque aparecem imagens no navegador:** a validação final exige teste prático com Baballonia, medindo latência perceptível e estabilidade durante sessões prolongadas.
+**Do not consider the project complete just because images appear in a browser:** final validation requires practical Baballonia testing, measuring perceived latency and stability during extended sessions.
 
-## 9. Testes planejados
+## 9. Planned tests
 
-| Teste | Procedimento | O que verificar |
+| Test | Procedure | What to verify |
 |---|---|---|
-| Baseline | 1, 2 e 3 câmeras com HTTP MJPEG atual | FPS, congelamentos, tráfego |
-| UDP isolado | Uma ESP32 enviando ao PC | Reconstrução e perdas |
-| Concorrência | Três ESP32 simultâneas | Ausência de bloqueio cruzado |
-| Perdas | Simular descarte/reordenação de datagramas | Timeout e descarte de frame |
-| Reconexão | Desligar e religar uma câmera | Recuperação automática |
-| Descoberta automática | Abrir o app com três câmeras na LAN, sem cadastrar IPs | Encontrar as três e listar identidade/IP/estado |
-| IP alterado | Renovar DHCP/reiniciar roteador | Reconhecer câmera por ID e retomar endpoint sem intervenção |
-| mDNS bloqueado | Bloquear multicast ou habilitar isolamento de clientes | Exibir diagnóstico e oferecer descoberta/fallback manual |
-| Cliente lento | Consumidor HTTP lendo devagar | Fila limitada; frames recentes |
-| Integração | Baballonia consumindo streams locais | Tracking funcional e compatibilidade |
-| Longa duração | Executar por horas | Memória estável, sem aumento progressivo da latência |
+| Baseline | 1, 2, and 3 cameras with current HTTP MJPEG | FPS, freezes, traffic |
+| Isolated UDP | One ESP32 sending to the PC | Reassembly and loss |
+| Concurrency | Three simultaneous ESP32s | No cross-camera blocking |
+| Loss | Simulate datagram dropping/reordering | Timeout and frame discard |
+| Reconnection | Power-cycle a camera | Automatic recovery |
+| Automatic discovery | Start the app with three LAN cameras without entering IPs | Find all three; list identity/IP/state |
+| IP change | Renew DHCP/restart router | Recognize camera ID and restore endpoint without intervention |
+| Blocked mDNS | Block multicast or enable client isolation | Diagnostics and alternative discovery/manual fallback |
+| Slow client | MJPEG consumer reading slowly | Bounded queue; recent frames |
+| Integration | Baballonia consuming local streams | Working tracking and compatibility |
+| Long duration | Run for hours | Stable memory; no progressively increasing latency |
 
-Também testar o PC conectado ao roteador via **Ethernet**, Wi-Fi em canal menos congestionado com 20 MHz e sinal adequado das três câmeras. UDP não elimina limitações físicas de rádio.
+Also test with the PC connected by **Ethernet**, a less congested 20 MHz Wi-Fi channel, and adequate signal for all cameras. UDP does not remove radio limitations.
 
-## 10. Plano de implementação
+## 10. Implementation plan
 
-### Fase 1 — Protocolo e prova de conceito
-- Selecionar modelo exato de ESP32, sensor e base do firmware; definir ambiente PlatformIO e configurações de placa/PSRAM.
-- Documentar formato binário dos datagramas.
-- Implementar envio UDP em uma câmera.
-- Criar receptor que remonta JPEG e salva/exibe frames.
+### Phase 1 - Protocol and proof of concept
 
-### Fase 2 — Multiplexação e robustez
-- Suportar três câmeras e implementar descoberta automática (mDNS/DNS-SD, fallback UDP broadcast), registro e heartbeats.
-- Criar identificação e atribuição persistente via arquivo de configuração e mensagens no terminal para olho esquerdo, olho direito e face.
-- Adicionar timeouts, descarte de frames, limites de memória e métricas.
-- Testar quedas e interferência.
+- Select exact ESP32 model, sensor, and firmware base; define PlatformIO environment and board/PSRAM configuration.
+- Document the binary datagram format.
+- Implement UDP sending on one camera.
+- Create a receiver that reassembles JPEG and saves/displays frames.
 
-### Fase 3 — Streaming HTTP local
-- Implementar endpoints MJPEG de loopback.
-- Impedir que cliente lento bloqueie recepção UDP.
-- Validar em navegador ou cliente MJPEG independente.
+### Phase 2 - Multiplexing and robustness
 
-### Fase 4 — Baballonia
-- Confirmar mecanismo suportado de entrada de vídeo.
-- Integrar cada stream à câmera correspondente.
-- Corrigir cabeçalhos, descoberta ou controles conforme necessário.
-- Testar tracking de olhos/face conforme suporte real do Baballonia.
+- Support three cameras and implement automatic discovery (mDNS/DNS-SD, UDP broadcast fallback), registration, and heartbeats.
+- Create persistent identification and assignments through a configuration file and terminal messages for left eye, right eye, and face.
+- Add timeouts, frame dropping, memory limits, and metrics.
+- Test disconnections and interference.
 
-### Fase 5 — Otimização
-- Medir latência e gargalos antes de ajustar FPS, compressão, datagramas e buffers.
-- Criar configuração persistente, logs no terminal e em arquivo, inicialização automática como processo/serviço e distribuição do app sem GUI.
+### Phase 3 - Local HTTP streaming
 
-## 11. Riscos e mitigação
+- Implement loopback MJPEG endpoints.
+- Prevent slow clients from blocking UDP reception.
+- Validate using a browser or independent MJPEG client.
 
-| Risco | Mitigação |
+### Phase 4 - Baballonia
+
+- Confirm the supported video input mechanism.
+- Integrate each stream with its corresponding camera.
+- Adjust headers, discovery, or controls as needed.
+- Test eye/face tracking according to actual Baballonia support.
+
+### Phase 5 - Optimization
+
+- Measure latency and bottlenecks before adjusting FPS, compression, datagrams, and buffers.
+- Add persistent configuration, terminal/file logging, automatic process/service startup, and application distribution without a GUI.
+
+## 11. Risks and mitigations
+
+| Risk | Mitigation |
 |---|---|
-| Interferência no Wi-Fi 2,4 GHz | AP dedicado, bom sinal, canais adequados, controle de bitrate |
-| Perda de UDP invalidando JPEGs | Frames pequenos, menor FPS/bitrate, descarte rápido, métricas |
-| Baballonia não aceitar os endpoints simples | Adaptador para entrada efetivamente suportada, após validação de código/API |
-| Cliente MJPEG lento gerar filas | Buffer de tamanho 1; timeout, descarte e desconexão de cliente lento |
-| Firmware não suportar câmera/JPEG como esperado | Validar placa, sensor e pipeline antes de portar |
-| Alto uso de CPU no PC | Repassar JPEG sem transcoding e perfilar antes de otimizar |
+| 2.4 GHz Wi-Fi interference | Dedicated AP, good signal, suitable channels, bitrate control |
+| UDP loss invalidates JPEGs | Small frames, lower FPS/bitrate, fast dropping, metrics |
+| Baballonia rejects simple endpoints | Adapter for the supported input after code/API validation |
+| Slow MJPEG client creates queues | One-frame buffer; timeout, dropping, and slow-client disconnection |
+| Firmware lacks expected camera/JPEG support | Validate board, sensor, and pipeline before porting |
+| High PC CPU usage | Forward JPEG without transcoding; profile before optimizing |
 
-## 12. Questões em aberto
+## 12. Open questions
 
-- Qual é o modelo exato das três placas ESP32 e seus sensores?
-- Qual versão/branch do OpenIris será usada?
-- Qual versão do Baballonia será usada e como configura fontes de vídeo?
-- As três entradas correspondem a olho esquerdo, direito e câmera facial?
-- Qual FPS, resolução e tamanho médio dos JPEGs medidos hoje?
-- O PC está conectado ao roteador por Ethernet ou Wi-Fi?
+- What are the exact models of the three ESP32 boards and their sensors?
+- Which OpenIris version/branch will be used?
+- Which Baballonia version will be used, and how are its video sources configured?
+- Do the three inputs correspond to left eye, right eye, and facial camera?
+- What FPS, resolution, and average JPEG size are currently measured?
+- Is the PC connected by Ethernet or Wi-Fi?
 
-## 13. Referências e base para recriar o firmware ESP32
+## 13. References and basis for recreating ESP32 firmware
 
-**Código-fonte e documentação para a implementação:**
+**Source code and implementation documentation:**
 
-- **Firmware original OpenIris (código-fonte, arquivado):** https://github.com/EyeTrackVR/OpenIris
-- **Documentação oficial do EyeTrackVR (inclui configuração e informações do firmware):** https://docs.eyetrackvr.dev/
-- **Novo firmware em ESP-IDF, reescrito em C/C++ (base recomendada para avaliar a alteração UDP):** https://github.com/EyeTrackVR/OpenIris-ESPIDF
-- **Releases/firmwares compilados do OpenIris original:** https://github.com/EyeTrackVR/OpenIris/releases
-- **Releases do OpenIris-ESPIDF:** https://github.com/EyeTrackVR/OpenIris-ESPIDF/releases
-- **Baballonia (código-fonte do programa consumidor):** https://github.com/Project-Babble/Baballonia
-- **Documentação do Baballonia no repositório:** https://github.com/Project-Babble/BabbleDocs/blob/main/docs/software/baballonia/baballonia.mdx
+- **Original OpenIris firmware (archived source):** https://github.com/EyeTrackVR/OpenIris
+- **Official EyeTrackVR documentation, including firmware setup and information:** https://docs.eyetrackvr.dev/
+- **New ESP-IDF firmware rewritten in C/C++, recommended for evaluating UDP changes:** https://github.com/EyeTrackVR/OpenIris-ESPIDF
+- **Original OpenIris releases/prebuilt firmware:** https://github.com/EyeTrackVR/OpenIris/releases
+- **OpenIris-ESPIDF releases:** https://github.com/EyeTrackVR/OpenIris-ESPIDF/releases
+- **Baballonia consumer source code:** https://github.com/Project-Babble/Baballonia
+- **Baballonia repository documentation:** https://github.com/Project-Babble/BabbleDocs/blob/main/docs/software/baballonia/baballonia.mdx
 
-**Orientação de implementação:** clonar o repositório do firmware apropriado à placa utilizada, identificar os módulos de captura, Wi-Fi, descoberta mDNS e streaming e **substituir/adicionar a saída UDP mantendo os controles necessários**. No OpenIris-ESPIDF, começar pelo README e pelos diretórios de código e perfis de placas; selecionar o perfil exato antes de compilar e gravar. Não usar binário de placa diferente.
+**Implementation guidance:** clone the firmware repository appropriate for the board, identify capture, Wi-Fi, mDNS discovery, and streaming modules, then **replace/add UDP output while retaining necessary controls**. For OpenIris-ESPIDF, start with the README, source directories, and board profiles; select the exact profile before building and flashing. Do not use a binary for a different board.
 
-O OpenIris original declara ter mDNS e prevê streaming via sockets em seu TODO; isso **não comprova** que a nova saída UDP já exista. A descoberta automática e o protocolo de transporte especificados aqui serão implementações novas ou adaptações que precisam ser testadas. A interface exata de entrada do Baballonia também precisará ser conferida no código/versão utilizada.
+Original OpenIris claims mDNS support and lists socket streaming in its TODO; this **does not prove** the new UDP output already exists. The automatic discovery and transport protocol specified here require new implementations or adaptations that must be tested. Baballonia's exact input interface also requires checking against the code/version in use.
 
 ---
 
-**Resumo:** aplicativo **somente terminal, sem GUI**; recriar/adaptar o firmware ESP32 **em projeto PlatformIO** para captura JPEG + **descoberta automática da ponte no PC** + UDP; o aplicativo descobre/pareia automaticamente as três câmeras e publica **UDP → MJPEG local**, priorizando frames recentes, recuperação automática e compatibilidade validada com Baballonia. A expectativa é **reduzir travamentos e latência acumulada**, não prometer ausência absoluta de perdas ou congelamentos.
+**Summary:** a **terminal-only application, no GUI**; recreate/adapt ESP32 firmware **as a PlatformIO project** for JPEG capture, **automatic discovery of the PC bridge**, and UDP; automatically discover/pair three cameras and publish **UDP to local MJPEG**, prioritizing recent frames, automatic recovery, and validated Baballonia compatibility. The expectation is to **reduce freezes and accumulated latency**, not promise zero loss or freezing.
