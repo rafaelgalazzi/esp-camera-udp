@@ -142,6 +142,31 @@ The allowlist and server ID are pairing filters, **not cryptographic authenticat
 
 Endpoints without a paired camera return 404. A paired but offline camera keeps its endpoint; the connection waits for new frames and resumes when the camera returns. The client may reconnect according to its own timeout.
 
+HTTP clients wake as soon as a complete frame is published, using a condition variable rather than frame polling. All accepted TCP connections use `TCP_NODELAY`. A bounded 100 ms housekeeping wake checks idle client disconnects and shutdown; it does not delay frame notifications.
+
+The maximum age for starting a frame send is configured independently of the camera's offline timeout:
+
+```ini
+[http]
+max_frame_age_ms=100
+```
+
+The default is 100 ms (allowed range: 1–60000 ms), measured from completed reassembly on the PC. A newly connected client waits for fresh video instead of receiving an older cached frame. Once a multipart frame starts, the bridge completes it or closes the connection on the existing 1-second send deadline; it never cuts a JPEG and continues with another frame on the same connection.
+
+Each HTTP subscriber has a process-local `client` ID. `HTTP_STATS` is logged at the configured statistics interval and when the client closes:
+
+| Field | Meaning |
+|---|---|
+| `fps_sent` | Complete multipart frames submitted to TCP per second in the reporting interval |
+| `sent` | Total complete frames submitted during this client's connection |
+| `skipped` | Complete frames superseded before this client selected them; excludes history before subscription |
+| `expired` | Selected candidate frames rejected by the age limit |
+| `send_failures` | Failed frame sends, including deadline expiry; the connection is then closed |
+| `send_ms_avg`, `send_ms_max` | Time spent sending successful multipart frames, for the reporting interval |
+| `bridge_ms_avg`, `bridge_ms_max` | Time from completed reassembly to successful multipart send completion, for the reporting interval |
+
+Counters are cumulative per connection; rates and timing averages/maxima cover the interval. Empty intervals report zero timing values. These are **local send metrics**, not confirmation of consumer receipt, decoding, display, or tracking. TCP and consumer buffers may add latency after the send completes.
+
 The inspected Baballonia code includes `IpCameraCaptureFactory`, which accepts `http://` addresses, and `IpCameraCapture`, which consumes JPEGs from the HTTP stream. Select Wireless/IP Camera input and use the URL for the corresponding role, as supported by the installed interface. The bridge is independent of the consumer version. Code inspection confirms that the input path exists; **it is not a tracking test against the installed Baballonia application**. References and the inspected commit are in [docs/validation.md](docs/validation.md).
 
 ## Quick troubleshooting

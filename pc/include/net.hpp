@@ -15,6 +15,7 @@ inline void close_socket(Socket s) { closesocket(s); }
 #include <sys/select.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <netinet/tcp.h>
 #include <fcntl.h>
 using Socket = int;
 constexpr Socket bad_socket = -1;

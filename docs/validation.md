@@ -13,6 +13,8 @@
 - Boot changes; rejection of packets from previous sessions, wrong servers, and unknown sources.
 - Expiration without waiting for the next frame to arrive.
 - A non-reading HTTP client does not block a healthy consumer and is disconnected.
+- Two new HTTP subscribers reject an aged cached frame while the camera is still within its offline timeout, then both receive the next complete frame from one publication.
+- Per-client HTTP metrics include periodic and final reports, expired-frame accounting, successful sends, and slow-client send failures.
 - Offline/reconnection states and clean shutdown.
 - Bridge restart and changed registration order preserve IDs/endpoints.
 - An allowlist with a free slot rejects unknown IDs; active-ID collisions at another IP are rejected.

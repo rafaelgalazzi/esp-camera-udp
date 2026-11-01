@@ -9,6 +9,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import json
 
 HEADER = struct.Struct("!4sBBHQIIQHHIQ")
 
@@ -66,7 +67,7 @@ def run(executable):
             control = free_port()
         cfg = root / "config.ini"
         cfg.write_text(f"[udp]\nhost=127.0.0.1\nport={video}\nframe_timeout_ms=100\n"
-                       f"[http]\nport={http}\n[discovery]\nport={control}\nstate_file={root / 'pairings.txt'}\n"
+                       f"[http]\nport={http}\nmax_frame_age_ms=100\n[discovery]\nport={control}\nstate_file={root / 'pairings.txt'}\n"
                        "[stream]\nmax_fps=90\n[monitoring]\nstats_interval_seconds=1\noffline_ms=1000\n")
         log_path = root / "bridge.log"
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -145,6 +146,23 @@ def run(executable):
                 send_frame(2, 4, images[0], server + 1)
                 send_frame(2, 5, images[1], server)
                 assert streams[1].frame() == images[1]
+                # New HTTP clients must not receive an old cached JPEG while the
+                # camera is still inside its separate 1-second offline timeout.
+                time.sleep(0.2)
+                observers = [Stream(http, 2), Stream(http, 2)]
+                streams.extend(observers)
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    waiting = [pool.submit(s.frame) for s in observers]
+                    time.sleep(0.15)
+                    assert all(not f.done() for f in waiting), "Stale cached JPEG was delivered"
+                    # A single new frame must wake every waiting subscriber.
+                    send_frame(2, 6, images[2], server)
+                    for f in waiting:
+                        assert f.result(timeout=2) == images[2]
+                    assert streams[1].frame() == images[2]
+                for s in observers:
+                    s.close()
+                    streams.remove(s)
                 time.sleep(1.2)
                 register(1, boot=2, server=server)
                 send_frame(1, 2, images[2], server, boot=2)
@@ -219,6 +237,19 @@ def run(executable):
                 stop(process)
             text = log_path.read_text()
             assert "OFFLINE" in text and "RECONNECTED" in text and "STATS" in text
+            http_stats = []
+            for line in text.splitlines():
+                message = json.loads(line)["message"]
+                if message.startswith("HTTP_STATS "):
+                    http_stats.append(dict(field.split("=", 1) for field in message.split()[1:]))
+            assert http_stats, "Missing per-client HTTP metrics"
+            assert any(int(s["expired"]) >= 1 and int(s["sent"]) >= 1
+                       and s["phase"] == "closed" for s in http_stats), "Missing stale-frame/client-close accounting"
+            assert any(int(s["send_failures"]) >= 1 for s in http_stats), "Missing slow-client failure accounting"
+            assert any(s["phase"] == "periodic" for s in http_stats), "Missing periodic HTTP metrics"
+            for s in http_stats:
+                for field in ("fps_sent", "send_ms_avg", "send_ms_max", "bridge_ms_avg", "bridge_ms_max"):
+                    assert float(s[field]) >= 0, (field, s)
             print("Integration passed: 3 streams, reorder/duplicates/loss, timeout, reboot, invalid packets, slow HTTP client, persistent endpoints, clean shutdown")
         except Exception:
             if process and process.poll() is None:

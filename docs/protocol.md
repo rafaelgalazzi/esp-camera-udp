@@ -49,3 +49,7 @@ Content-Length: <bytes>\r\n
 ```
 
 There is no global Content-Length or HTTP chunked encoding. An interrupted connection does not require a final delimiter. A slow client has a 1-second send deadline per part; there is no per-client frame queue.
+
+TCP connections use `TCP_NODELAY`. Completed-frame publication notifies all waiting HTTP clients; each client selects only its camera's newest unseen complete frame. The independent `http.max_frame_age_ms` limit defaults to 100 ms and is checked before starting the part, using local reassembly completion time. Older cached frames are skipped, including for new connections. This limit is separate from the camera's offline state and does not interrupt a part already being sent.
+
+`HTTP_STATS` reports per-client successful frame rate, sent/skipped/expired counters, failed sends, send duration, and reassembly-to-send-completion time. It does not measure delivery or processing inside the consumer.

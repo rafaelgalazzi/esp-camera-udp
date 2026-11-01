@@ -47,6 +47,7 @@ struct Config
     std::string udp_host = "0.0.0.0", http_host = "127.0.0.1", state_file = "pairings.txt", log_level = "INFO";
     uint16_t udp_port = 5000, control_port = 5001, http_port = 8080;
     unsigned timeout = 100, offline = 3000, stats_interval = 5, fps = 90;
+    unsigned http_max_frame_age = 100;
     bool auto_pair = true, json = false;
     uint64_t server = 0;
     std::map<uint64_t, Pairing> pairs;
@@ -115,6 +116,8 @@ struct Config
                 http_host = v;
             else if (key == "http.port")
                 http_port = uint16_t(number(v, 1, 65535));
+            else if (key == "http.max_frame_age_ms")
+                http_max_frame_age = number(v, 1, 60000);
             else if (key == "discovery.port")
                 control_port = uint16_t(number(v, 1, 65535));
             else if (key == "discovery.auto_pair")

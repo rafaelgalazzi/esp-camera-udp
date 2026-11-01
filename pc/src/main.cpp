@@ -8,6 +8,7 @@
 #include "process_stats.hpp"
 #include <iostream>
 #include <mutex>
+#include <condition_variable>
 #include <thread>
 #include <atomic>
 #include <array>
@@ -76,7 +77,49 @@ struct Camera
     iris::Counters previous;
 };
 static std::mutex cameras_mutex;
+static std::condition_variable frame_ready;
 static std::map<uint64_t, Camera> cameras;
+static std::atomic<uint64_t> next_client_id{1};
+
+struct HttpMetrics
+{
+    uint64_t client_id = next_client_id++, camera;
+    uint64_t sent = 0, skipped = 0, expired = 0, failures = 0;
+    uint64_t previous_sent = 0, reported_at = now_ms();
+    double send_sum = 0, send_max = 0, bridge_sum = 0, bridge_max = 0;
+    explicit HttpMetrics(uint64_t id) : camera(id) {}
+    void report(bool closed = false)
+    {
+        const auto now = now_ms();
+        if (!closed && now - reported_at < config.stats_interval * 1000ULL)
+            return;
+        const auto count = sent - previous_sent;
+        const double seconds = double(now - reported_at) / 1000.0;
+        std::ostringstream line;
+        line << std::fixed << std::setprecision(2)
+             << "HTTP_STATS client=" << client_id << " camera=" << id_string(camera)
+             << " phase=" << (closed ? "closed" : "periodic")
+             << " fps_sent=" << (seconds > 0 ? count / seconds : 0)
+             << " sent=" << sent << " skipped=" << skipped << " expired=" << expired
+             << " send_failures=" << failures
+             << " send_ms_avg=" << (count ? send_sum / count : 0) << " send_ms_max=" << send_max
+             << " bridge_ms_avg=" << (count ? bridge_sum / count : 0) << " bridge_ms_max=" << bridge_max;
+        log("INFO", line.str());
+        previous_sent = sent;
+        reported_at = now;
+        send_sum = send_max = bridge_sum = bridge_max = 0;
+    }
+    ~HttpMetrics()
+    {
+        try
+        {
+            report(true);
+        }
+        catch (...)
+        {
+        }
+    }
+};
 
 static void client(Socket raw)
 {
@@ -84,8 +127,11 @@ static void client(Socket raw)
     try
     {
         nonblocking(socket);
-        int small = 16 * 1024;
-        setsockopt(socket, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<char *>(&small), sizeof(small));
+        int no_delay = 1;
+        if (setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char *>(&no_delay), sizeof(no_delay)) != 0)
+            throw std::runtime_error("Cannot enable TCP_NODELAY");
+        int packageSize = 16 * 1024;
+        setsockopt(socket, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<char *>(&packageSize), sizeof(packageSize));
         std::string request;
         const auto deadline = now_ms() + 2000;
         while (!stopping && now_ms() < deadline && request.size() < 4096 && request.find("\r\n\r\n") == std::string::npos)
@@ -118,33 +164,71 @@ static void client(Socket raw)
         if (!send_text(socket, "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\n\r\n", now_ms() + 1000))
             return;
         uint64_t generation = 0;
+        bool first_frame = true;
+        HttpMetrics metrics(id);
         while (!stopping)
         {
-            std::shared_ptr<const std::vector<uint8_t>> jpeg;
+            metrics.report();
+            // A finite housekeeping wake detects disconnected idle clients; new
+            // frames wake immediately through the condition variable.
+            if (ready(socket, false, 0))
             {
-                std::lock_guard<std::mutex> lock(cameras_mutex);
+                char byte;
+                if (recv(socket, &byte, 1, 0) <= 0)
+                    return;
+            }
+            std::shared_ptr<const std::vector<uint8_t>> jpeg;
+            uint64_t completed_at = 0;
+            {
+                std::unique_lock<std::mutex> lock(cameras_mutex);
                 auto &c = cameras.at(id);
-                if (c.frames.generation != generation && c.frames.latest && now_ms() - c.frames.last_complete < config.offline)
+                if (first_frame)
                 {
-                    jpeg = c.frames.latest;
+                    generation = c.frames.generation - (c.frames.latest ? 1 : 0);
+                    first_frame = false;
+                }
+                frame_ready.wait_for(lock, std::chrono::milliseconds(100), [&]
+                                     { return stopping.load() || c.frames.generation != generation; });
+                if (stopping)
+                    break;
+                if (c.frames.generation != generation)
+                {
+                    metrics.skipped += c.frames.generation - generation - 1;
                     generation = c.frames.generation;
+                    if (c.frames.latest)
+                    {
+                        completed_at = c.frames.last_complete;
+                        if (now_ms() - completed_at < config.http_max_frame_age)
+                            jpeg = c.frames.latest;
+                        else
+                            ++metrics.expired;
+                    }
                 }
             }
             if (!jpeg)
+                continue;
+            // Recheck immediately before writing multipart bytes. Once started,
+            // complete the part or close the connection on the send deadline.
+            if (now_ms() - completed_at >= config.http_max_frame_age)
             {
-                if (ready(socket, false, 20))
-                {
-                    char byte;
-                    if (recv(socket, &byte, 1, 0) <= 0)
-                        return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                ++metrics.expired;
                 continue;
             }
+            const auto send_started = std::chrono::steady_clock::now();
             auto until = now_ms() + 1000;
             if (!send_text(socket, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + std::to_string(jpeg->size()) + "\r\n\r\n", until) ||
                 !send_all(socket, jpeg->data(), jpeg->size(), until) || !send_text(socket, "\r\n", until))
+            {
+                ++metrics.failures;
                 return;
+            }
+            const double send_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - send_started).count();
+            const double bridge_ms = double(now_ms() - completed_at);
+            ++metrics.sent;
+            metrics.send_sum += send_ms;
+            metrics.send_max = std::max(metrics.send_max, send_ms);
+            metrics.bridge_sum += bridge_ms;
+            metrics.bridge_max = std::max(metrics.bridge_max, bridge_ms);
         }
     }
     catch (const std::exception &e)
@@ -267,8 +351,11 @@ static void receive(Socket socket, bool control)
         auto &c = found->second;
         if (!c.registered || now - c.hello_at > 6000 || c.boot != h.boot || c.source.sin_addr.s_addr != source.sin_addr.s_addr)
             return;
-        if (c.frames.push(h, buffer + iris::header_size, now, config.timeout) && c.state != "STREAMING")
+        if (c.frames.push(h, buffer + iris::header_size, now, config.timeout))
         {
+            frame_ready.notify_all();
+            if (c.state == "STREAMING")
+                return;
             log("INFO", std::string(c.ever_streamed ? "RECONNECTED" : "STREAMING") + " camera=" + id_string(h.camera));
             if (c.ever_streamed && c.state == "OFFLINE")
                 ++c.reconnections;
@@ -400,9 +487,11 @@ int main(int argc, char **argv)
         catch (...)
         {
             stopping = 1;
+            frame_ready.notify_all();
             http_task.get();
             throw;
         }
+        frame_ready.notify_all();
         http_task.get();
         log("INFO", "Stopped");
     }
