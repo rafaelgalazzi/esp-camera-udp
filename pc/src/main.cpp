@@ -6,6 +6,7 @@
 #include "config.hpp"
 #include "reassembly.hpp"
 #include "process_stats.hpp"
+#include "terminal_panel.hpp"
 #include <iostream>
 #include <mutex>
 #include <condition_variable>
@@ -31,6 +32,8 @@ static BOOL WINAPI console_handler(DWORD event)
 #endif
 static std::mutex log_mutex;
 static Config config;
+static TerminalPanel panel;
+static uint64_t last_camera_hello = 0;
 static std::string escaped(const std::string &s)
 {
     std::string out;
@@ -51,6 +54,12 @@ static void log(const std::string &level, const std::string &msg)
     if (rank(level) < rank(config.log_level))
         return;
     std::lock_guard<std::mutex> guard(log_mutex);
+    if (panel.active())
+    {
+        if (msg.rfind("STATS ", 0) != 0 && msg.rfind("HTTP_STATS ", 0) != 0 && msg.rfind("PROCESS ", 0) != 0)
+            panel.event = level + " " + msg;
+        return;
+    }
     auto time = std::time(nullptr);
     std::tm utc{};
 #ifdef _WIN32
@@ -66,6 +75,16 @@ static void log(const std::string &level, const std::string &msg)
         std::cout << stamp << " " << level << " " << msg << "\n";
     std::cout.flush();
 }
+static std::string camera_url(unsigned endpoint)
+{
+    const auto host = config.http_host == "0.0.0.0" ? "127.0.0.1" : config.http_host;
+    return "http://" + host + ":" + std::to_string(config.http_port) + "/camera/" + std::to_string(endpoint) + ".mjpeg";
+}
+static std::string camera_location(uint64_t id)
+{
+    const auto &pair = config.pairs.at(id);
+    return " endpoint=" + std::to_string(pair.endpoint) + " role=" + pair.role + " url=" + camera_url(pair.endpoint);
+}
 struct Camera
 {
     iris::Reassembler frames;
@@ -80,6 +99,37 @@ static std::mutex cameras_mutex;
 static std::condition_variable frame_ready;
 static std::map<uint64_t, Camera> cameras;
 static std::atomic<uint64_t> next_client_id{1};
+
+static void render_panel(uint64_t now, bool force = false)
+{
+    static uint64_t last = 0;
+    if (!panel.active() || (!force && now - last < 250))
+        return;
+    last = now;
+    std::lock_guard<std::mutex> camera_guard(cameras_mutex);
+    std::vector<std::string> lines{"OpenIris UDP Bridge - cameras", "URLs neste PC | Ctrl+C para sair", ""};
+    for (unsigned endpoint = 1; endpoint <= 3; ++endpoint)
+    {
+        std::string state = "UNPAIRED", details = "Aguardando descoberta automatica...";
+        for (const auto &pair : config.pairs)
+        {
+            if (pair.second.endpoint != endpoint)
+                continue;
+            const auto &camera = cameras.at(pair.first);
+            state = camera.registered ? camera.state : "WAITING";
+            details = "IP: " + (camera.registered ? ip_string(camera.source) : "--") +
+                      " | ID: " + id_string(pair.first) + " | " + pair.second.role;
+        }
+        lines.push_back("Camera " + std::to_string(endpoint) + " | " + state);
+        lines.push_back(camera_url(endpoint));
+        lines.push_back(details);
+        lines.push_back("");
+    }
+    std::lock_guard<std::mutex> log_guard(log_mutex);
+    lines.push_back("Ultimo evento:");
+    lines.push_back(panel.event);
+    panel.draw(lines);
+}
 
 struct HttpMetrics
 {
@@ -288,13 +338,42 @@ static void receive(Socket socket, bool control)
     std::lock_guard<std::mutex> lock(cameras_mutex);
     if (control)
     {
-        if (h.type != iris::Type::hello || (h.server && h.server != config.server))
+        if (h.type != iris::Type::hello)
             return;
+        last_camera_hello = now;
+        if (h.server && h.server != config.server)
+        {
+            if (config.auto_pair && config.pairs.empty())
+            {
+                // Recover a lost installation identity from an already paired camera.
+                config.server = h.server;
+                config.save_state();
+                log("WARN", "PAIRING_RECOVERED server=" + id_string(config.server) + " from_camera=" + id_string(h.camera) + " ip=" + ip_string(source));
+            }
+            else
+            {
+                static uint64_t last_warning = 0;
+                if (!last_warning || now - last_warning >= 10000)
+                {
+                    log("WARN", "PAIRING_MISMATCH camera=" + id_string(h.camera) + " ip=" + ip_string(source) + " camera_server=" + id_string(h.server) + " bridge_server=" + id_string(config.server) + " (camera detected; existing pairings or auto_pair=false prevent recovery)");
+                    last_warning = now;
+                }
+                return;
+            }
+        }
         auto p = config.pairs.find(h.camera);
         if (p == config.pairs.end())
         {
             if (!config.auto_pair || config.pairs.size() >= 3)
+            {
+                static uint64_t last_warning = 0;
+                if (!last_warning || now - last_warning >= 10000)
+                {
+                    log("WARN", "PAIRING_REJECTED camera=" + id_string(h.camera) + " (auto_pair=false or all three camera slots occupied)");
+                    last_warning = now;
+                }
                 return;
+            }
             unsigned endpoint = 1;
             for (; endpoint <= 3; ++endpoint)
             {
@@ -331,6 +410,7 @@ static void receive(Socket socket, bool control)
                 metadata += ch >= 32 && ch <= 126 ? char(ch) : '?';
             }
             log("INFO", "REGISTER camera=" + id_string(h.camera) + " ip=" + ip_string(source) + " boot=" + std::to_string(h.boot) + " device=" + metadata);
+            log("INFO", "CAMERA camera=" + id_string(h.camera) + " ip=" + ip_string(source) + " state=CONNECTING" + camera_location(h.camera));
         }
         c.hello_at = now;
         iris::Header ack = h;
@@ -356,7 +436,7 @@ static void receive(Socket socket, bool control)
             frame_ready.notify_all();
             if (c.state == "STREAMING")
                 return;
-            log("INFO", std::string(c.ever_streamed ? "RECONNECTED" : "STREAMING") + " camera=" + id_string(h.camera));
+            log("INFO", std::string(c.ever_streamed ? "RECONNECTED" : "STREAMING") + " camera=" + id_string(h.camera) + camera_location(h.camera));
             if (c.ever_streamed && c.state == "OFFLINE")
                 ++c.reconnections;
             c.ever_streamed = true;
@@ -366,6 +446,12 @@ static void receive(Socket socket, bool control)
 }
 static void monitor(uint64_t now, bool print, double seconds)
 {
+    static uint64_t last_discovery_warning = now;
+    if (now - last_discovery_warning >= 10000 && (!last_camera_hello || now - last_camera_hello >= 10000))
+    {
+        log("WARN", "DISCOVERY_WAIT: no camera HELLO received in the last 10 seconds on UDP " + std::to_string(config.control_port) + "; check camera power/Wi-Fi, same LAN, Windows firewall for this executable, and Wi-Fi client isolation.");
+        last_discovery_warning = now;
+    }
     static auto prior_process = process_stats();
     if (print)
     {
@@ -410,7 +496,16 @@ int main(int argc, char **argv)
     try
     {
         Network network;
-        std::string path = "config.ini", level;
+        std::filesystem::path path = "config.ini";
+#ifdef _WIN32
+        std::wstring executable(32768, L'\0');
+        const auto length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+        if (!length || length >= executable.size())
+            throw std::runtime_error("Cannot locate executable directory");
+        executable.resize(length);
+        path = std::filesystem::path(executable).parent_path() / "config.ini";
+#endif
+        std::string level;
         unsigned interval = 0;
         bool json = false;
         for (int i = 1; i < argc; ++i)
@@ -438,6 +533,8 @@ int main(int argc, char **argv)
                 throw std::runtime_error("Unknown argument: " + a);
         }
         config.read(path);
+        if (std::filesystem::path(config.state_file).is_relative())
+            config.state_file = (std::filesystem::absolute(path).parent_path() / config.state_file).string();
         if (!level.empty())
             config.log_level = level;
         if (interval)
@@ -460,6 +557,17 @@ int main(int argc, char **argv)
 #endif
         log("INFO", "UDP=" + config.udp_host + ":" + std::to_string(config.udp_port) + " discovery=" + std::to_string(config.control_port) + " HTTP=" + config.http_host + ":" + std::to_string(config.http_port) + " server=" + id_string(config.server));
         log("INFO", "Discovery uses camera UDP broadcast/unicast; if none appear, check Wi-Fi client isolation and inbound UDP firewall rules.");
+        log("INFO", "Camera URLs for this PC (copy into your browser or tracking app; video starts when the camera is streaming):");
+        for (unsigned endpoint = 1; endpoint <= 3; ++endpoint)
+        {
+            std::string details = " state=UNPAIRED";
+            for (const auto &pair : config.pairs)
+                if (pair.second.endpoint == endpoint)
+                    details = " camera=" + id_string(pair.first) + " role=" + pair.second.role + " state=WAITING";
+            log("INFO", "CAMERA endpoint=" + std::to_string(endpoint) + details + " url=" + camera_url(endpoint));
+        }
+        panel.start(config.json);
+        render_panel(now_ms(), true);
         auto http_task = std::async(std::launch::async, http_loop, http.s);
         auto last = now_ms();
         auto tick = last;
@@ -478,6 +586,7 @@ int main(int argc, char **argv)
                 {
                     bool print = now - last >= config.stats_interval * 1000ULL;
                     monitor(now, print, double(now - last) / 1000.0);
+                    render_panel(now);
                     tick = now;
                     if (print)
                         last = now;
@@ -494,9 +603,12 @@ int main(int argc, char **argv)
         frame_ready.notify_all();
         http_task.get();
         log("INFO", "Stopped");
+        render_panel(now_ms(), true);
+        panel.stop();
     }
     catch (const std::exception &e)
     {
+        panel.stop();
         std::cerr << "ERROR " << e.what() << "\n";
         return 1;
     }

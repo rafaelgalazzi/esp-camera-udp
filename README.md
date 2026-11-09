@@ -1,6 +1,8 @@
 # OpenIris UDP Bridge
 
-Stream up to **three ESP32 cameras over UDP**, with a PC bridge that exposes each video feed as **local HTTP MJPEG** for a browser or tracking application.
+The goal of this project is to improve ESP32 camera streaming by sending video data **over UDP to a PC**, where a bridge reassembles the frames and exposes each video feed as **local HTTP MJPEG** for a browser or tracking application. It supports up to **three cameras**.
+
+The PC bridge **automatically discovers cameras and their IP addresses** from their UDP announcements on the local network, so you do not need to find or enter each camera's IP manually. Cameras are identified by their persistent IDs, allowing the bridge to recognize them even when their IP addresses change.
 
 The firmware uses **ESP-IDF/C++** and the desktop application uses **C++17**, operated from the terminal.
 
@@ -75,7 +77,17 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\Release\openiris-udp-bridge.exe --config config.ini
 ```
 
-The executable can run outside the project directory: pass the configuration file path. `state_file` is relative to the working directory, so use an absolute path when running through a scheduler. The target PC must have the MSVC runtime installed.
+On Windows, the build places `config.ini` beside the executable, which reads it automatically even when launched by double-click or from another working directory. The MSVC runtime is linked statically; no separate Visual C++ runtime installation is required.
+
+Create a portable distribution containing only the executable and INI in a fresh output folder:
+
+```powershell
+cmake --install build --config Release --prefix build/portable
+```
+
+Copy `build/portable` to the target PC and run `openiris-udp-bridge.exe`. Edit `config.ini` in that folder and restart to apply changes. Builds and installs supply the default INI only when it is missing. They never copy pairing data from the repository or another installation. The application discovers cameras automatically and creates its own `pairings.txt` at runtime. Rebuilding in a previously used folder preserves its existing settings and runtime state; use a fresh output folder for a clean distribution.
+
+The bridge also generates `pairings.txt` to retain its identity and camera pairings. Preserve this file when moving an existing installation. Relative `state_file` paths now resolve beside the selected INI, rather than against the working directory. An explicit `--config` path remains supported (relative paths resolve from the working directory). Linux/macOS still default to `config.ini` in the working directory.
 
 Linux/macOS (the POSIX code path is implemented; this delivery was validated on Windows):
 
@@ -103,6 +115,10 @@ Use `--json > bridge.log` to save one JSON event per line. `Ctrl+C` shuts down t
 See [firmware/README.md](firmware/README.md) for USB configuration, building, and flashing. The environment for the supported hardware is `xiao_esp32s3_ov2640`. The same binary can be flashed to all three boards; their factory MAC addresses identify them.
 
 ## Discovery and pairing
+
+With `auto_pair=true` and no registered cameras, the bridge automatically recovers the server ID advertised by the first already-paired camera. No firmware update or manual copy of `pairings.txt` is needed for this recovery. Once a camera is registered, other server IDs remain rejected. Run only the intended bridge during recovery: a fresh bridge can adopt an ID advertised by another installation on the same LAN. Retaining `pairings.txt` remains necessary to preserve endpoint assignments and roles.
+
+`PAIRING_RECOVERED` reports successful recovery; `PAIRING_MISMATCH` reports a detected camera bound to another server. `DISCOVERY_WAIT` means no valid camera announcements arrived for 10 seconds; check the network and firewall permissions for the executable's current path.
 
 1. Start the bridge. It listens on UDP `5000` for video and `5001` for control.
 2. Configure camera Wi-Fi through the INI before building or over USB, and connect the cameras to the same LAN.
@@ -133,6 +149,10 @@ After registering the cameras, `auto_pair=false` limits registration to known ID
 The allowlist and server ID are pairing filters, **not cryptographic authentication**. IDs and video travel in clear text. Use a trusted LAN. To avoid collisions during migration, an active ID at another IP is accepted only after 6 seconds without a heartbeat from the previous IP.
 
 ## View the streams
+
+On a Windows terminal (at least 55 columns by 18 rows), the application keeps a fixed panel with each camera's URL, status, IP, ID, and role. Status refreshes every 250 ms without scrolling the URLs. The most recent event appears below the cameras. `Ctrl+C` exits and restores the cursor. JSON output, redirected output, and unsupported terminals keep the line-based logs.
+
+At startup the terminal lists all three camera URLs, marked `UNPAIRED` or `WAITING`. When a camera connects, it prints its ID, IP, endpoint, role, and URL; `STREAMING` and `RECONNECTED` also include the URL for copying. URLs use the configured HTTP port and host (`0.0.0.0` is displayed as `127.0.0.1` for use on this PC). These messages require the default `INFO` log level.
 
 | Camera | URL on the same PC |
 |---|---|

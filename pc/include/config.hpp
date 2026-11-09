@@ -72,11 +72,11 @@ struct Config
                 throw std::runtime_error("Camera roles must be unique");
         }
     }
-    void read(const std::string &path)
+    void read(const std::filesystem::path &path)
     {
         std::ifstream f(path);
         if (!f)
-            throw std::runtime_error("Cannot open config: " + path);
+            throw std::runtime_error("Cannot open config: " + path.string());
         std::string line, section;
         unsigned lineno = 0;
         while (std::getline(f, line))

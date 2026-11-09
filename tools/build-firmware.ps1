@@ -34,7 +34,7 @@ if ($repositoryPath.Contains(' ')) {
     New-Item -ItemType Directory -Force -Path $commonDestination | Out-Null
     Get-ChildItem -LiteralPath (Join-Path $repositoryPath 'common') |
         Copy-Item -Destination $commonDestination -Recurse -Force
-    foreach ($fileName in @('platformio.ini', 'platformio.local.ini', 'CMakeLists.txt', 'sdkconfig.defaults', 'partitions.csv', 'dependencies.lock', 'pio_compat.py', 'wifi_config.py', 'wifi.ini')) {
+    foreach ($fileName in @('platformio.ini', 'platformio.local.ini', 'CMakeLists.txt', 'sdkconfig.defaults', 'partitions.csv', 'dependencies.lock', 'pio_compat.py', 'wifi_config.py', 'merge_firmware.py', 'wifi.ini')) {
         $sourceFile = Join-Path $firmwarePath $fileName
         if (Test-Path -LiteralPath $sourceFile) { Copy-Item -LiteralPath $sourceFile -Destination $projectPath -Force }
         elseif ($fileName -eq 'wifi.ini') {
@@ -54,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { throw "PlatformIO failed with exit code $LASTEXITCODE
 $outputPath = Join-Path $firmwarePath 'artifacts'
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 $binaryPath = Join-Path $projectPath '.pio/build/xiao_esp32s3_ov2640'
-foreach ($artifact in @('firmware.bin', 'firmware.elf', 'bootloader.bin', 'partitions.bin')) {
+foreach ($artifact in @('firmware.bin', 'firmware-merged.bin', 'firmware.elf', 'bootloader.bin', 'partitions.bin')) {
     Copy-Item -LiteralPath (Join-Path $binaryPath $artifact) -Destination $outputPath -Force
 }
 Set-Content -LiteralPath (Join-Path $outputPath 'build-directory.txt') -Value $projectPath
@@ -62,3 +62,4 @@ if ($projectPath -ne $firmwarePath) {
     Copy-Item -LiteralPath (Join-Path $projectPath 'dependencies.lock') -Destination $firmwarePath -Force
 }
 Write-Host "Firmware artifacts: $outputPath"
+Write-Host "Web flasher: $(Join-Path $outputPath 'firmware-merged.bin') - flash address 0x0"

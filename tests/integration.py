@@ -118,7 +118,17 @@ def run(executable):
         try:
             with log_path.open("wb") as logfile:
                 process = start(logfile)
-                server = register(1)
+                # A fresh bridge recovers the ID retained by an already paired camera.
+                remembered_server = 0x123456789abcdef0
+                server = register(1, server=remembered_server)
+                assert server == remembered_server, "Fresh bridge did not recover camera pairing"
+                # An established bridge must not change identity for another server.
+                udp.sendto(packet(1, 99, server=server + 1), ("127.0.0.1", control))
+                try:
+                    udp.recvfrom(2048)
+                    raise AssertionError("Existing bridge accepted foreign server")
+                except socket.timeout:
+                    pass
                 assert register(2) == server and register(3) == server
                 streams = [Stream(http, i) for i in (1, 2, 3)]
                 with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -237,6 +247,7 @@ def run(executable):
                 stop(process)
             text = log_path.read_text()
             assert "OFFLINE" in text and "RECONNECTED" in text and "STATS" in text
+            assert "PAIRING_RECOVERED" in text and "PAIRING_MISMATCH" in text
             http_stats = []
             for line in text.splitlines():
                 message = json.loads(line)["message"]

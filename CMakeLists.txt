@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(openiris_udp_bridge VERSION 1.0.0 LANGUAGES CXX)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
@@ -12,6 +13,25 @@ if(WIN32)
 endif()
 add_executable(openiris-udp-bridge pc/src/main.cpp)
 target_link_libraries(openiris-udp-bridge PRIVATE bridge_core)
+add_custom_target(bridge-config ALL
+  COMMAND ${CMAKE_COMMAND}
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DOUTPUT_DIR=$<TARGET_FILE_DIR:openiris-udp-bridge>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare-portable.cmake"
+  DEPENDS openiris-udp-bridge
+  VERBATIM)
+add_custom_command(TARGET openiris-udp-bridge POST_BUILD
+  COMMAND ${CMAKE_COMMAND}
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DOUTPUT_DIR=$<TARGET_FILE_DIR:openiris-udp-bridge>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare-portable.cmake"
+  VERBATIM)
+install(TARGETS openiris-udp-bridge RUNTIME DESTINATION .)
+install(CODE "
+  set(SOURCE_DIR \"${CMAKE_CURRENT_SOURCE_DIR}\")
+  set(OUTPUT_DIR \"\${CMAKE_INSTALL_PREFIX}\")
+  include(\"${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare-portable.cmake\")
+")
 if(MSVC)
   target_compile_options(openiris-udp-bridge PRIVATE /W4 /permissive-)
 else()

@@ -54,6 +54,12 @@ The project script `pio_compat.py` adapts SDK compilation response files to Plat
 
 ESP-IDF/PlatformIO does not handle some arguments containing spaces in build paths correctly; CMake also expands 8.3 paths. The wrapper copies required files to `%TEMP%\iris-udp-<identifier>`, leaving the original sources in place and keeping the build cache there. After success, it copies `firmware.bin`, `firmware.elf`, `bootloader.bin`, and `partitions.bin` to `firmware/artifacts/` and updates `dependencies.lock`. If you use `secrets.h`, it is also present in the temporary copy. Alternatively, keep the entire project in a path without spaces, such as `C:\src\LocalImageProcessor`, with `common` alongside `firmware`.
 
+## Single BIN for the Seeed web flasher
+
+Run `.\tools\build-firmware.ps1 -Action build` from the repository root. Use `firmware/artifacts/firmware-merged.bin` in the [Seeed ESP Flasher](https://www.seeedstudio.com/xiao-series-page/playground/esp-flasher/): connect the XIAO ESP32S3, select **Add BIN files**, choose this file, and verify its flash address is **0x0** before flashing. No additional bootloader or partition file is needed. This merged image contains the build's bootloader, partition table, and application at their generated offsets. PlatformIO also generates it in `.pio/build/xiao_esp32s3_ov2640/`.
+
+Use the merged image for a full installation. Its padding covers NVS, so flashing it resets saved Wi-Fi/pairing data; the configured `wifi.ini` values are applied on boot. For an application-only update preserving NVS, use `firmware.bin` at `0x10000` with the existing matching partition table, without erasing the flash.
+
 ## Configure Wi-Fi before building
 
 Edit `firmware/wifi.ini` (or copy `wifi.example.ini` to that name):
